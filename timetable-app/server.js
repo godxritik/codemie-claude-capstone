@@ -82,6 +82,19 @@ const parseCategory = (c) => {
   return category;
 };
 
+// Optional boolean: undefined passes through, anything but true/false is a 400.
+const requireBoolean = (value, field) => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') throw new HttpError(400, `${field} must be true or false`);
+  return value;
+};
+
+// Throws 415 unless the request media type is application/json.
+const requireJson = (req) => {
+  const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/json') throw new HttpError(415, 'Content-Type must be application/json');
+};
+
 const findOverlap = (date, startMin, endMin, ignoreId = -1) =>
   db
     .prepare('SELECT * FROM entries WHERE date = ? AND id != ? AND start_min < ? AND end_min > ? LIMIT 1')
@@ -112,7 +125,8 @@ function updateEntry(id, body) {
   const category = body.category !== undefined ? parseCategory(body.category) : row.category;
   const startMin = body.start !== undefined ? parseTime(body.start) : row.start_min;
   const endMin = body.end !== undefined ? parseTime(body.end, { allowEnd24: true }) : row.end_min;
-  const done = body.done !== undefined ? (body.done ? 1 : 0) : row.done;
+  const doneFlag = requireBoolean(body.done, 'done');
+  const done = doneFlag === undefined ? row.done : doneFlag ? 1 : 0;
   if (endMin <= startMin) throw new HttpError(400, 'End time must be after start time');
   const clash = findOverlap(row.date, startMin, endMin, id);
   if (clash) throw new HttpError(409, `Overlaps with "${clash.title}" (${fmt(clash.start_min)}-${fmt(clash.end_min)})`);
@@ -133,14 +147,31 @@ function generateTimetable(body) {
   if (!Array.isArray(body.tasks) || body.tasks.length === 0) throw new HttpError(400, 'Add at least one task');
   if (body.tasks.length > 50) throw new HttpError(400, 'At most 50 tasks per timetable');
 
+  const replace = requireBoolean(body.replace, 'replace') ?? false;
+
+  const withPrefix = (i, fn) => {
+    try {
+      return fn();
+    } catch (e) {
+      if (e instanceof HttpError) throw new HttpError(e.status, `Task ${i + 1}: ${e.message}`);
+      throw e;
+    }
+  };
   const tasks = body.tasks.map((t, i) => {
+    if (t === null || typeof t !== 'object' || Array.isArray(t)) throw new HttpError(400, `Task ${i + 1}: must be an object`);
     const minutes = Number(t.minutes);
     if (!Number.isInteger(minutes) || minutes < 5 || minutes > 480) {
       throw new HttpError(400, `Task ${i + 1}: duration must be 5-480 minutes`);
     }
     const priority = Number(t.priority ?? 2);
     if (![1, 2, 3].includes(priority)) throw new HttpError(400, `Task ${i + 1}: priority must be 1 (high), 2 or 3 (low)`);
-    return { title: parseTitle(t.title), category: parseCategory(t.category), minutes, priority, order: i };
+    return {
+      title: withPrefix(i, () => parseTitle(t.title)),
+      category: withPrefix(i, () => parseCategory(t.category)),
+      minutes,
+      priority,
+      order: i,
+    };
   });
   tasks.sort((a, b) => a.priority - b.priority || a.order - b.order);
 
@@ -160,7 +191,7 @@ function generateTimetable(body) {
   const insert = db.prepare('INSERT INTO entries (date, title, start_min, end_min, category) VALUES (?, ?, ?, ?, ?)');
   db.exec('BEGIN');
   try {
-    if (body.replace) db.prepare('DELETE FROM entries WHERE date = ?').run(date);
+    if (replace) db.prepare('DELETE FROM entries WHERE date = ?').run(date);
     else {
       const clash = plan.map((p) => findOverlap(date, p.start, p.end)).find(Boolean);
       if (clash) throw new HttpError(409, `Generated plan overlaps with "${clash.title}"; choose another start time or replace the day`);
@@ -173,6 +204,11 @@ function generateTimetable(body) {
   }
   return listEntries(date);
 }
+
+const readJsonBody = (req) => {
+  requireJson(req);
+  return readBody(req);
+};
 
 const readBody = (req) =>
   new Promise((resolve, reject) => {
@@ -216,8 +252,8 @@ async function handleApi(req, res, url) {
     if (id === undefined && req.method === 'GET') {
       return send(res, 200, listEntries(parseDate(url.searchParams.get('date'))));
     }
-    if (id === undefined && req.method === 'POST') return send(res, 201, createEntry(await readBody(req)));
-    if (id !== undefined && req.method === 'PATCH') return send(res, 200, updateEntry(id, await readBody(req)));
+    if (id === undefined && req.method === 'POST') return send(res, 201, createEntry(await readJsonBody(req)));
+    if (id !== undefined && req.method === 'PATCH') return send(res, 200, updateEntry(id, await readJsonBody(req)));
     if (id !== undefined && req.method === 'DELETE') {
       const info = db.prepare('DELETE FROM entries WHERE id = ?').run(id);
       if (!info.changes) throw new HttpError(404, 'Entry not found');
@@ -225,7 +261,7 @@ async function handleApi(req, res, url) {
     }
   }
 
-  if (resource === 'generate' && req.method === 'POST') return send(res, 201, generateTimetable(await readBody(req)));
+  if (resource === 'generate' && req.method === 'POST') return send(res, 201, generateTimetable(await readJsonBody(req)));
   if (resource === 'day' && req.method === 'DELETE') {
     db.prepare('DELETE FROM entries WHERE date = ?').run(parseDate(url.searchParams.get('date')));
     return send(res, 204);
@@ -257,7 +293,13 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
     if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed');
-    serveStatic(res, decodeURIComponent(url.pathname));
+    let pathname;
+    try {
+      pathname = decodeURIComponent(url.pathname);
+    } catch {
+      throw new HttpError(400, 'Bad request');
+    }
+    serveStatic(res, pathname);
   } catch (e) {
     if (e instanceof HttpError) return send(res, e.status, { error: e.message });
     console.error(e);
