@@ -60,6 +60,24 @@
           <button type="submit">Generate</button>
         </form>
       </section>
+
+      <section class="panel" aria-labelledby="tpl-title">
+        <h2 id="tpl-title">Task templates</h2>
+        <p class="muted">Save the task rows above under a name and load them on another day.</p>
+        <div id="tpl-error" class="form-error" role="alert" tabindex="-1"></div>
+        <p id="tpl-status" role="status" class="muted"></p>
+        <div class="tpl-save">
+          <label>Template name <input id="tpl-name" maxlength="50" autocomplete="off"></label>
+          <button type="button" id="tpl-save">Save template</button>
+        </div>
+        <div class="tpl-load">
+          <label>Saved templates <select id="tpl-list"></select></label>
+          <div class="edit-actions">
+            <button type="button" id="tpl-load" class="secondary">Load</button>
+            <button type="button" id="tpl-delete" class="danger">Delete</button>
+          </div>
+        </div>
+      </section>
     </aside>
   </main>
 

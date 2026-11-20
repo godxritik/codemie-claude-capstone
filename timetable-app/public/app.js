@@ -372,6 +372,14 @@ function addTaskRow() {
   taskRows.append(row);
 }
 
+const collectTasks = () =>
+  [...taskRows.children].map((row) => ({
+    title: row.querySelector('[name=title]').value,
+    minutes: Number(row.querySelector('[name=minutes]').value),
+    priority: Number(row.querySelector('[name=priority]').value),
+    category: row.querySelector('[name=category]').value,
+  }));
+
 function shiftDay(days) {
   const d = new Date(`${dateInput.value}T00:00:00`);
   d.setDate(d.getDate() + days);
@@ -428,12 +436,7 @@ $('#gen-form').addEventListener('submit', async (ev) => {
   const f = new FormData(form);
   const replace = f.get('replace') === 'on';
   if (replace && scheduleEl.children.length && !confirm('This will replace everything planned for this day. Continue?')) return;
-  const tasks = [...taskRows.children].map((row) => ({
-    title: row.querySelector('[name=title]').value,
-    minutes: Number(row.querySelector('[name=minutes]').value),
-    priority: Number(row.querySelector('[name=priority]').value),
-    category: row.querySelector('[name=category]').value,
-  }));
+  const tasks = collectTasks();
   const describe = (u) => `"${u.title}" (${u.minutes} min, ${u.reason})`;
   setBusy(form, true);
   try {
@@ -456,6 +459,83 @@ $('#gen-form').addEventListener('submit', async (ev) => {
   }
 });
 
+// --- Task templates ---
+const tplError = $('#tpl-error');
+const tplList = $('#tpl-list');
+const tplStatus = $('#tpl-status');
+let templates = [];
+
+function renderTemplates() {
+  tplList.replaceChildren();
+  for (const t of templates) tplList.add(new Option(`${t.name} (${t.tasks.length} task${t.tasks.length === 1 ? '' : 's'})`, t.id));
+  if (!templates.length) tplList.add(new Option('No saved templates', ''));
+  tplList.disabled = !templates.length;
+  $('#tpl-load').disabled = !templates.length;
+  $('#tpl-delete').disabled = !templates.length;
+}
+
+async function loadTemplates() {
+  templates = await api('/templates');
+  renderTemplates();
+}
+
+async function runTemplate(fn) {
+  clearError(tplError);
+  tplStatus.textContent = '';
+  try {
+    await fn();
+  } catch (e) {
+    showError(tplError, e, (f) => (f === 'name' ? $('#tpl-name') : resolveField($('#gen-form'), f)));
+  }
+}
+
+$('#tpl-save').addEventListener('click', () =>
+  runTemplate(async () => {
+    const name = $('#tpl-name').value;
+    const body = { name, tasks: collectTasks() };
+    let saved;
+    try {
+      saved = await api('/templates', { method: 'POST', body });
+    } catch (e) {
+      if (e.status !== 409 || !confirm(`A template named "${name.trim()}" already exists. Replace it?`)) throw e;
+      saved = await api('/templates', { method: 'POST', body: { ...body, replace: true } });
+    }
+    $('#tpl-name').value = '';
+    await loadTemplates();
+    tplList.value = String(saved.id);
+    tplStatus.textContent = `Template "${saved.name}" saved.`;
+  }),
+);
+
+$('#tpl-load').addEventListener('click', () =>
+  runTemplate(async () => {
+    const t = templates.find((x) => String(x.id) === tplList.value);
+    if (!t) return;
+    const typed = [...taskRows.children].some((row) => row.querySelector('[name=title]').value.trim());
+    if (typed && !confirm('Replace the task rows you have typed with this template?')) return;
+    taskRows.replaceChildren();
+    for (const task of t.tasks) {
+      addTaskRow();
+      const row = taskRows.lastElementChild;
+      row.querySelector('[name=title]').value = task.title;
+      row.querySelector('[name=minutes]').value = task.minutes;
+      row.querySelector('[name=priority]').value = String(task.priority);
+      row.querySelector('[name=category]').value = task.category;
+    }
+    tplStatus.textContent = `Template "${t.name}" loaded.`;
+  }),
+);
+
+$('#tpl-delete').addEventListener('click', () =>
+  runTemplate(async () => {
+    const t = templates.find((x) => String(x.id) === tplList.value);
+    if (!t || !confirm(`Delete template "${t.name}"?`)) return;
+    await api(`/templates/${t.id}`, { method: 'DELETE' });
+    await loadTemplates();
+    tplStatus.textContent = `Template "${t.name}" deleted.`;
+  }),
+);
+
 $('#clear-day').addEventListener('click', () => {
   if (!scheduleEl.children.length || !confirm('Delete all entries for this day?')) return;
   runSchedule(async () => {
@@ -474,6 +554,7 @@ $('#clear-day').addEventListener('click', () => {
       fillCategories($('#add-form').category);
       addTaskRow();
       await load();
+      await loadTemplates();
     },
     { focus: false },
   );

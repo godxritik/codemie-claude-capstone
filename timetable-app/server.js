@@ -25,6 +25,12 @@ db.exec(`
     done INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date, start_min);
+  CREATE TABLE IF NOT EXISTS templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL UNIQUE,
+    tasks TEXT NOT NULL
+  );
 `);
 
 const CATEGORIES = ['work', 'study', 'health', 'personal', 'break', 'general'];
@@ -141,18 +147,10 @@ function updateEntry(id, body) {
   return toDto(db.prepare('SELECT * FROM entries WHERE id = ?').get(id));
 }
 
-// Places tasks from `start`, highest priority first, in free time (see scheduler.js); skipped tasks are reported.
-function generateTimetable(body) {
-  const date = parseDate(body.date);
-  const startMin = parseTime(body.start ?? '09:00', { field: 'start' });
-  const breakMin = Number(body.breakMinutes ?? 10);
-  if (!Number.isInteger(breakMin) || breakMin < 0 || breakMin > 120) {
-    throw new HttpError(400, 'Break must be a whole number of minutes between 0 and 120', { field: 'breakMinutes' });
-  }
-  if (!Array.isArray(body.tasks) || body.tasks.length === 0) throw new HttpError(400, 'Add at least one task', { field: 'tasks' });
-  if (body.tasks.length > 50) throw new HttpError(400, 'At most 50 tasks per timetable', { field: 'tasks' });
-
-  const replace = requireBoolean(body.replace, 'replace') ?? false;
+// Shared by /api/generate and /api/templates so both apply the same task rules.
+function parseTasks(list) {
+  if (!Array.isArray(list) || list.length === 0) throw new HttpError(400, 'Add at least one task', { field: 'tasks' });
+  if (list.length > 50) throw new HttpError(400, 'At most 50 tasks per timetable', { field: 'tasks' });
 
   const withPrefix = (i, fn) => {
     try {
@@ -162,7 +160,7 @@ function generateTimetable(body) {
       throw e;
     }
   };
-  const tasks = body.tasks.map((t, i) => {
+  const tasks = list.map((t, i) => {
     const at = (k) => `tasks[${i}]${k ? `.${k}` : ''}`;
     if (t === null || typeof t !== 'object' || Array.isArray(t)) {
       throw new HttpError(400, `Task ${i + 1}: must be an object`, { field: at() });
@@ -181,6 +179,20 @@ function generateTimetable(body) {
       order: i,
     };
   });
+  return tasks;
+}
+
+// Places tasks from `start`, highest priority first, in free time (see scheduler.js); skipped tasks are reported.
+function generateTimetable(body) {
+  const date = parseDate(body.date);
+  const startMin = parseTime(body.start ?? '09:00', { field: 'start' });
+  const breakMin = Number(body.breakMinutes ?? 10);
+  if (!Number.isInteger(breakMin) || breakMin < 0 || breakMin > 120) {
+    throw new HttpError(400, 'Break must be a whole number of minutes between 0 and 120', { field: 'breakMinutes' });
+  }
+  const replace = requireBoolean(body.replace, 'replace') ?? false;
+
+  const tasks = parseTasks(body.tasks);
   const reason = replace ? 'does not fit before midnight' : `no free gap long enough at or after ${fmt(startMin)}`;
   const insert = db.prepare('INSERT INTO entries (date, title, start_min, end_min, category) VALUES (?, ?, ?, ?, ?)');
   let unscheduled;
@@ -208,6 +220,27 @@ function generateTimetable(body) {
     throw e;
   }
   return { entries: listEntries(date), unscheduled };
+}
+
+const templateDto = (r) => ({ id: r.id, name: r.name, tasks: JSON.parse(r.tasks) });
+
+const listTemplates = () => db.prepare('SELECT * FROM templates ORDER BY name_key').all().map(templateDto);
+
+function saveTemplate(body) {
+  const name = String(body.name ?? '').trim();
+  if (!name || name.length > 50) throw new HttpError(400, 'Template name must be 1-50 characters', { field: 'name' });
+  const tasks = parseTasks(body.tasks).map(({ title, category, minutes, priority }) => ({ title, category, minutes, priority }));
+  const replace = requireBoolean(body.replace, 'replace') ?? false;
+  const key = name.toLowerCase();
+  const existing = db.prepare('SELECT id FROM templates WHERE name_key = ?').get(key);
+  if (existing && !replace) throw new HttpError(409, `A template named "${name}" already exists`, { field: 'name' });
+  const json = JSON.stringify(tasks);
+  if (existing) {
+    db.prepare('UPDATE templates SET name = ?, tasks = ? WHERE id = ?').run(name, json, existing.id);
+    return templateDto(db.prepare('SELECT * FROM templates WHERE id = ?').get(existing.id));
+  }
+  const info = db.prepare('INSERT INTO templates (name, name_key, tasks) VALUES (?, ?, ?)').run(name, key, json);
+  return templateDto(db.prepare('SELECT * FROM templates WHERE id = ?').get(info.lastInsertRowid));
 }
 
 const readJsonBody = (req) => {
@@ -262,6 +295,18 @@ async function handleApi(req, res, url) {
     if (id !== undefined && req.method === 'DELETE') {
       const info = db.prepare('DELETE FROM entries WHERE id = ?').run(id);
       if (!info.changes) throw new HttpError(404, 'Entry not found');
+      return send(res, 204);
+    }
+  }
+
+  if (resource === 'templates') {
+    const id = parts[2] !== undefined ? Number(parts[2]) : undefined;
+    if (id !== undefined && !Number.isInteger(id)) throw new HttpError(400, 'Invalid id');
+    if (id === undefined && req.method === 'GET') return send(res, 200, listTemplates());
+    if (id === undefined && req.method === 'POST') return send(res, 201, saveTemplate(await readJsonBody(req)));
+    if (id !== undefined && req.method === 'DELETE') {
+      const info = db.prepare('DELETE FROM templates WHERE id = ?').run(id);
+      if (!info.changes) throw new HttpError(404, 'Template not found');
       return send(res, 204);
     }
   }
