@@ -33,6 +33,7 @@ async function api(path, options = {}) {
   const data = await res.json();
   if (!res.ok) {
     const err = new Error(data.error || 'Request failed');
+    err.status = res.status;
     err.body = data;
     throw err;
   }
@@ -197,9 +198,55 @@ function renderEditForm(li, entry) {
 
   form.append(error, labelled('Title', title), row, labelled('Category', category), actions);
   form.addEventListener('submit', (ev) => {
-    ev.preventDefault(); // saving is wired up in the next change
+    ev.preventDefault();
+    saveEdit(form, entry);
+  });
+  form.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      cancelEdit(entry.id);
+    }
   });
   li.append(form);
+}
+
+// Disables the submit button and flags the form busy while a request runs.
+function setBusy(form, busy) {
+  const submit = form.querySelector('[type=submit]');
+  if (submit) submit.disabled = busy;
+  form.toggleAttribute('aria-busy', busy);
+}
+
+// Sends only the changed fields (never `done`); on error the form stays open and the entry unchanged.
+async function saveEdit(form, entry) {
+  const region = form.querySelector('.form-error');
+  region.textContent = '';
+  const changes = {};
+  for (const k of ['title', 'start', 'end', 'category']) {
+    let v = form.elements[k].value;
+    if (k === 'title' || k === 'end') v = v.trim();
+    if (v !== entry[k]) changes[k] = v;
+  }
+  if (!Object.keys(changes).length) return cancelEdit(entry.id);
+
+  setBusy(form, true);
+  try {
+    await api(`/entries/${entry.id}`, { method: 'PATCH', body: changes });
+    editingId = null;
+    await load(); // the row may have moved after the re-sort
+    focusEditButton(entry.id);
+  } catch (e) {
+    if (e.status === 404) {
+      editingId = null;
+      await load();
+      showMessage(e.message);
+    } else {
+      region.textContent = e.message;
+      region.focus();
+    }
+  } finally {
+    setBusy(form, false);
+  }
 }
 
 function focusEditButton(id) {
