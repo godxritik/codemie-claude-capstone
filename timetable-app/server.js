@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { planTasks } from './scheduler.js';
+import { toCsv } from './export.js';
 import { buildSummary } from './summary.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -364,6 +365,14 @@ async function handleApi(req, res, url) {
   if (resource === 'generate' && req.method === 'POST') return send(res, 201, generateTimetable(await readJsonBody(req)));
   if (resource === 'summary' && req.method === 'GET') {
     return send(res, 200, summarize(url.searchParams.get('from'), url.searchParams.get('to')));
+  }
+  if (resource === 'export' && req.method === 'GET') {
+    const date = parseDate(url.searchParams.get('date'));
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="timetable-${date}.csv"`,
+    });
+    return res.end(toCsv(listEntries(date)));
   }
   if (resource === 'copy' && req.method === 'POST') return send(res, 201, copyDay(await readJsonBody(req)));
   if (resource === 'day' && req.method === 'DELETE') {

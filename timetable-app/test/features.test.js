@@ -173,3 +173,46 @@ test('summary: empty day has no categories; edits and deletes are reflected', as
   await call(`/entries/${e.id}`, 'DELETE');
   assert.deepEqual((await call('/summary?from=2033-06-01&to=2033-06-01')).data.days[0].categories, []);
 });
+
+// ---- TIME-10 export ----
+
+const exportCsv = async (date) => {
+  const res = await fetch(`${ORIGIN}/api/export${date === undefined ? '' : `?date=${date}`}`);
+  // Decode by hand: res.text() would strip the BOM we want to assert on.
+  return { status: res.status, res, text: Buffer.from(await res.arrayBuffer()).toString('utf8') };
+};
+
+test('export: headers, BOM, CRLF, done values', async () => {
+  const a = (await add('2034-01-10', 'Plan', '09:00', '10:00', 'work')).data;
+  await add('2034-01-10', 'Lunch', '12:00', '13:00', 'personal');
+  await call(`/entries/${a.id}`, 'PATCH', { done: true });
+  const { status, res, text } = await exportCsv('2034-01-10');
+  assert.equal(status, 200);
+  assert.match(res.headers.get('content-type'), /^text\/csv/);
+  assert.equal(res.headers.get('content-disposition'), 'attachment; filename="timetable-2034-01-10.csv"');
+  assert.equal(text, '\uFEFFdate,title,start,end,category,done\r\n2034-01-10,Plan,09:00,10:00,work,true\r\n2034-01-10,Lunch,12:00,13:00,personal,false\r\n');
+});
+
+test('export: RFC 4180 quoting and formula neutralisation', async () => {
+  await add('2034-02-01', 'a, b', '01:00', '02:00');
+  await add('2034-02-01', 'say "hi"', '02:00', '03:00');
+  await add('2034-02-01', '=SUM(A1)', '03:00', '04:00');
+  await add('2034-02-01', '+1', '04:00', '05:00');
+  await add('2034-02-01', '-2', '05:00', '06:00');
+  await add('2034-02-01', '@cmd', '06:00', '07:00');
+  await add('2034-02-01', '=1,2', '07:00', '08:00');
+  const rows = (await exportCsv('2034-02-01')).text.split('\r\n');
+  assert.equal(rows[1], '2034-02-01,"a, b",01:00,02:00,general,false');
+  assert.equal(rows[2], '2034-02-01,"say ""hi""",02:00,03:00,general,false');
+  assert.equal(rows[3], "2034-02-01,'=SUM(A1),03:00,04:00,general,false");
+  assert.equal(rows[4], "2034-02-01,'+1,04:00,05:00,general,false");
+  assert.equal(rows[5], "2034-02-01,'-2,05:00,06:00,general,false");
+  assert.equal(rows[6], "2034-02-01,'@cmd,06:00,07:00,general,false");
+  assert.equal(rows[7], `2034-02-01,"'=1,2",07:00,08:00,general,false`);
+});
+
+test('export: invalid or missing date is 400', async () => {
+  assert.equal((await exportCsv()).status, 400);
+  assert.equal((await exportCsv('2034-02-31')).status, 400);
+  assert.equal((await exportCsv('x')).status, 400);
+});

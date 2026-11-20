@@ -47,6 +47,11 @@ npm test
 | DELETE | `/api/day?date=YYYY-MM-DD` | Clear a day |
 | POST | `/api/generate` | `{date, start, breakMinutes, replace, tasks:[{title, minutes, priority 1-3, category}]}`; `replace` must be a boolean. Returns `201 {entries, unscheduled:[{title, minutes, reason}]}` |
 | GET | `/api/categories` | List categories |
+| GET/POST | `/api/templates` | List / save task templates `{name (1-50), tasks, replace?}`; duplicate name (case-insensitive) is `409` |
+| DELETE | `/api/templates/:id` | Delete a template |
+| POST | `/api/copy` | `{from, to, replace}`; `409 {existing}` when the target has entries and `replace` is false |
+| GET | `/api/summary?from=&to=` | Per-day count, minutes, done (breaks excluded) plus per-category minutes and share (breaks included); max 31 days |
+| GET | `/api/export?date=` | CSV download (`timetable-YYYY-MM-DD.csv`) |
 
 Notes:
 

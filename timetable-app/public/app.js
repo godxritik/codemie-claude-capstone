@@ -148,6 +148,8 @@ function render(entries = currentEntries) {
   const tasks = entries.filter((e) => e.category !== 'break');
   const done = tasks.filter((e) => e.done).length;
   $('#copy-day').disabled = !entries.length;
+  $('#export-day').disabled = !entries.length;
+  $('#print-date').textContent = dateInput.value;
   progressEl.textContent = tasks.length ? `${done}/${tasks.length} done` : '';
 
   for (const e of entries) {
@@ -635,6 +637,12 @@ $('#copy-day').addEventListener('click', () => {
     showMessage(`Copied ${res.copied} entries to ${to}.`, 'ok');
   });
 });
+
+$('#export-day').addEventListener('click', () => {
+  // The attachment header makes the browser download without leaving the page.
+  location.href = `/api/export?date=${encodeURIComponent(dateInput.value)}`;
+});
+$('#print-day').addEventListener('click', () => window.print());
 
 $('#clear-day').addEventListener('click', () => {
   if (!scheduleEl.children.length || !confirm('Delete all entries for this day?')) return;
