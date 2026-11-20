@@ -13,8 +13,9 @@ into a timetable (highest priority first, with breaks in between).
 npm start
 ```
 
-Open http://localhost:3000. Set `PORT` or `DB_FILE` to change the port or database location
-(default `data/timetable.db`, created on first run).
+Open http://127.0.0.1:3000. Set `PORT`, `HOST` or `DB_FILE` to change the port, bind address or
+database location (default `data/timetable.db`, created on first run). `HOST` defaults to `127.0.0.1`
+(loopback only; the app has no authentication). Use `HOST=0.0.0.0` to expose it on the network.
 
 ## Test
 
@@ -25,22 +26,34 @@ npm test
 ## Features
 
 - Day view with previous/next/today navigation
-- Add, delete and tick off entries (categories: work, study, health, personal, break, general)
+- Add, edit, delete and tick off entries (categories: work, study, health, personal, break, general)
 - Overlapping entries are rejected
-- Generate a timetable from tasks (duration, priority, category), a start time and break length;
-  optionally replaces the day's existing entries
+- Generate a timetable from tasks (duration, priority, category), a start time and break length.
+  By default tasks are placed around the day's existing entries; with `replace` the day is cleared first
+- Tasks that do not fit are skipped and reported (title, minutes, reason) instead of failing the request
+- Input validation: real calendar dates, `HH:MM` times, titles 1-100 characters, task duration 5-480
+  minutes, break 0-120 minutes, at most 50 tasks. `24:00` is accepted as an end time only
+- Known limitations: the UI has not been verified in a browser (see `docs/testing.md`); generate still
+  accepts a boolean `priority` (coerced to a number); a JSON array body gets a misleading error message
 
 ## API
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/entries?date=YYYY-MM-DD` | List a day's entries |
-| POST | `/api/entries` | Create `{date, title, start, end, category}` |
-| PATCH | `/api/entries/:id` | Update title, times, category or `done` |
+| POST | `/api/entries` | Create `{date, title, start, end, category}`; `201` with the entry |
+| PATCH | `/api/entries/:id` | Update title, times, category or `done` (`done` must be a boolean) |
 | DELETE | `/api/entries/:id` | Delete an entry |
 | DELETE | `/api/day?date=YYYY-MM-DD` | Clear a day |
-| POST | `/api/generate` | `{date, start, breakMinutes, replace, tasks:[{title, minutes, priority 1-3, category}]}` |
+| POST | `/api/generate` | `{date, start, breakMinutes, replace, tasks:[{title, minutes, priority 1-3, category}]}`; `replace` must be a boolean. Returns `201 {entries, unscheduled:[{title, minutes, reason}]}` |
 | GET | `/api/categories` | List categories |
+
+Notes:
+
+- `POST` and `PATCH` requests must send `Content-Type: application/json`, otherwise `415`.
+- Errors are `{error}`; validation errors (`400`) may also include `field` (e.g. `end`, `tasks[0].minutes`).
+  `409` means an overlap. If no task fits, generate returns `400` with `{error, unscheduled}` and the day is unchanged.
+- Breaking change: `/api/generate` used to return the entries array; it now returns `{entries, unscheduled}`.
 
 ## Structure
 
