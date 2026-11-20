@@ -29,9 +29,11 @@ db.exec(`
 const CATEGORIES = ['work', 'study', 'health', 'personal', 'break', 'general'];
 
 class HttpError extends Error {
-  constructor(status, message) {
+  // extra: additional JSON properties for the error body (never `error`)
+  constructor(status, message, extra = {}) {
     super(message);
     this.status = status;
+    this.extra = extra;
   }
 }
 
@@ -177,18 +179,27 @@ function generateTimetable(body) {
   });
   tasks.sort((a, b) => a.priority - b.priority || a.order - b.order);
 
+  // Tasks that do not fit are skipped (and reported); later, smaller tasks are still tried.
   const plan = [];
+  const unscheduled = [];
   let cursor = startMin;
-  tasks.forEach((t, i) => {
-    if (cursor + t.minutes > 24 * 60) throw new HttpError(400, `"${t.title}" does not fit before midnight; shorten tasks or start earlier`);
-    plan.push({ title: t.title, category: t.category, start: cursor, end: cursor + t.minutes });
-    cursor += t.minutes;
-    const next = tasks[i + 1];
-    if (breakMin > 0 && next && cursor + breakMin + next.minutes <= 24 * 60) {
-      plan.push({ title: 'Break', category: 'break', start: cursor, end: cursor + breakMin });
-      cursor += breakMin;
+  let placedAny = false;
+  for (const t of tasks) {
+    let start = cursor;
+    const withBreak = placedAny && breakMin > 0 && start + breakMin + t.minutes <= 24 * 60;
+    if (withBreak) start += breakMin;
+    if (start + t.minutes > 24 * 60) {
+      unscheduled.push({ title: t.title, minutes: t.minutes, reason: 'does not fit before midnight' });
+      continue;
     }
-  });
+    if (withBreak) plan.push({ title: 'Break', category: 'break', start: cursor, end: start });
+    plan.push({ title: t.title, category: t.category, start, end: start + t.minutes });
+    cursor = start + t.minutes;
+    placedAny = true;
+  }
+  if (!plan.length) {
+    throw new HttpError(400, 'No task fits before midnight; shorten tasks or start earlier', { unscheduled });
+  }
 
   const insert = db.prepare('INSERT INTO entries (date, title, start_min, end_min, category) VALUES (?, ?, ?, ?, ?)');
   db.exec('BEGIN');
@@ -204,7 +215,7 @@ function generateTimetable(body) {
     db.exec('ROLLBACK');
     throw e;
   }
-  return listEntries(date);
+  return { entries: listEntries(date), unscheduled };
 }
 
 const readJsonBody = (req) => {
@@ -303,7 +314,7 @@ const server = http.createServer(async (req, res) => {
     }
     serveStatic(res, pathname);
   } catch (e) {
-    if (e instanceof HttpError) return send(res, e.status, { error: e.message });
+    if (e instanceof HttpError) return send(res, e.status, { ...e.extra, error: e.message });
     console.error(e);
     send(res, 500, { error: 'Internal server error' });
   }

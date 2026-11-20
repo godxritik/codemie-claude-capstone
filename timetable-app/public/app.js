@@ -165,11 +165,11 @@ $('#gen-form').addEventListener('submit', async (ev) => {
     category: row.querySelector('[name=category]').value,
   }));
   const ok = await run(async () => {
-    const entries = await api('/generate', {
+    const res = await api('/generate', {
       method: 'POST',
       body: { date: dateInput.value, start: f.get('start'), breakMinutes: Number(f.get('breakMinutes')), tasks, replace },
     });
-    render(entries);
+    render(res.entries);
   });
   if (ok) showMessage('Timetable generated.', true);
 });

@@ -90,7 +90,7 @@ test('generates a timetable ordered by priority with breaks', async () => {
   });
   assert.equal(res.status, 201);
   assert.deepEqual(
-    res.data.map((e) => [e.title, e.start, e.end]),
+    res.data.entries.map((e) => [e.title, e.start, e.end]),
     [
       ['Report', '09:00', '10:30'],
       ['Break', '10:30', '10:45'],
