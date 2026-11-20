@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__atlassian__jira_get_all_projects",
+      "mcp__atlassian__jira_search_projects",
+      "mcp__atlassian__jira_get_user_profile",
+      "mcp__atlassian__jira_get_project_issue_types",
+      "mcp__atlassian__jira_create_issue",
+      "mcp__atlassian__jira_search",
+      "mcp__atlassian__jira_add_comment"
+    ]
+  }
+}

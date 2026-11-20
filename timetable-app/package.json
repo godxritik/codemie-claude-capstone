@@ -1,0 +1,12 @@
+{
+  "name": "day-timetable-generator",
+  "version": "1.0.0",
+  "description": "Simple day planner and timetable generator",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node --no-warnings server.js",
+    "test": "node --no-warnings --test test/"
+  }
+}

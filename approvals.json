@@ -1,0 +1,118 @@
+{
+  "project": "timetable-app",
+  "phases": {
+    "analysis": {
+      "status": "approved",
+      "iteration": 1,
+      "artifacts": [],
+      "reviewer": "Ritik Gaur",
+      "decidedAt": "2026-11-20T08:37:28.839Z",
+      "comments": [
+        "Report file not written (subagent Write refused); report delivered as text in the session.",
+        "Approved as-is by human; accepted recommended scope (TIME-14, TIME-3, TIME-5, TIME-4, TIME-12) and decisions D1-D8 as proposed"
+      ],
+      "jira": [
+        "TIME-2",
+        "TIME-3",
+        "TIME-4",
+        "TIME-5",
+        "TIME-6",
+        "TIME-7",
+        "TIME-8",
+        "TIME-9",
+        "TIME-10",
+        "TIME-11",
+        "TIME-12",
+        "TIME-13",
+        "TIME-14",
+        "TIME-15",
+        "TIME-16",
+        "TIME-17",
+        "TIME-18",
+        "TIME-19",
+        "TIME-20",
+        "TIME-21",
+        "TIME-22",
+        "TIME-23",
+        "TIME-24",
+        "TIME-25"
+      ]
+    },
+    "plan": {
+      "status": "approved",
+      "iteration": 1,
+      "artifacts": [
+        "docs/plan/implementation-plan.md",
+        "docs/plan/pull-request-draft.md"
+      ],
+      "reviewer": "Ritik Gaur",
+      "decidedAt": "2026-11-20T08:43:25.871Z",
+      "comments": [
+        "Approved as-is by human; open items (127.0.0.1 binding, S->M resize, scheduler module) left to developer judgement within plan"
+      ],
+      "jira": [
+        "TIME-2",
+        "TIME-3",
+        "TIME-4",
+        "TIME-5",
+        "TIME-12",
+        "TIME-14"
+      ]
+    },
+    "design": {
+      "status": "approved",
+      "iteration": 1,
+      "artifacts": [
+        "docs/design/architecture.md",
+        "docs/design/high-level-design.md",
+        "docs/design/low-level-design.md",
+        "docs/design/wireframes.md"
+      ],
+      "reviewer": "Ritik Gaur",
+      "decidedAt": "2026-11-20T08:52:37.807Z",
+      "comments": [
+        "Approved by human with all recommendations accepted: Q1 bind 127.0.0.1 as WI-14, Q2 resize S->M, Q4 scheduler.js, A1-A7, forward-only cursor (E5), input border darkening and disabled submit during requests"
+      ],
+      "jira": [
+        "TIME-2",
+        "TIME-3",
+        "TIME-4",
+        "TIME-5",
+        "TIME-12",
+        "TIME-14"
+      ]
+    },
+    "development": {
+      "status": "pending",
+      "iteration": 0,
+      "artifacts": [],
+      "reviewer": null,
+      "decidedAt": null,
+      "comments": []
+    },
+    "review": {
+      "status": "pending",
+      "iteration": 0,
+      "artifacts": [],
+      "reviewer": null,
+      "decidedAt": null,
+      "comments": []
+    },
+    "testing": {
+      "status": "pending",
+      "iteration": 0,
+      "artifacts": [],
+      "reviewer": null,
+      "decidedAt": null,
+      "comments": []
+    },
+    "documentation": {
+      "status": "pending",
+      "iteration": 0,
+      "artifacts": [],
+      "reviewer": null,
+      "decidedAt": null,
+      "comments": []
+    }
+  }
+}

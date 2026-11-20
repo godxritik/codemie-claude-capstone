@@ -1,0 +1,14 @@
+{
+  "projectKey": "TIME",
+  "epicIssueType": "Epic",
+  "storyIssueType": "Story",
+  "taskIssueType": "Task",
+  "labels": ["sdlc-pipeline", "timetable-app"],
+  "transitions": {
+    "analysis": "To Do",
+    "development": "In Progress",
+    "review": "In Review",
+    "testing": "In Testing",
+    "documentation": "Done"
+  }
+}

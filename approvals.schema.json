@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SDLC human-in-the-loop approvals",
+  "type": "object",
+  "required": ["project", "phases"],
+  "properties": {
+    "project": { "type": "string" },
+    "phases": {
+      "type": "object",
+      "required": ["analysis", "plan", "design", "development", "review", "testing", "documentation"],
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(analysis|plan|design|development|review|testing|documentation)$": { "$ref": "#/definitions/phase" }
+      }
+    }
+  },
+  "definitions": {
+    "phase": {
+      "type": "object",
+      "required": ["status", "iteration"],
+      "properties": {
+        "status": {
+          "enum": ["pending", "in_progress", "awaiting_approval", "approved", "revision_requested", "rejected"]
+        },
+        "iteration": { "type": "integer", "minimum": 0 },
+        "artifacts": { "type": "array", "items": { "type": "string" } },
+        "jira": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9]+-[0-9]+$" } },
+        "reviewer": { "type": ["string", "null"] },
+        "decidedAt": { "type": ["string", "null"], "format": "date-time" },
+        "comments": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

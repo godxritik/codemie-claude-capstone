@@ -1,0 +1,23 @@
+{
+  "enabledMcpjsonServers": ["atlassian"],
+  "permissions": {
+    "deny": ["Read(./.env)", "Edit(./.env)", "Write(./.env)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/hooks/check-gate.js\"" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/hooks/log-subagent.js\"" }
+        ]
+      }
+    ]
+  }
+}
