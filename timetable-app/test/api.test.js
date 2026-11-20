@@ -103,7 +103,7 @@ test('generates a timetable ordered by priority with breaks', async () => {
   );
 });
 
-test('generate refuses plans that overflow the day or clash without replace', async () => {
+test('generate refuses plans that overflow the day and places tasks after existing entries without replace', async () => {
   const overflow = await call('/generate', 'POST', {
     date: '2030-01-18', start: '22:00', replace: true, tasks: [{ title: 'Long', minutes: 180 }],
   });
@@ -289,4 +289,78 @@ test('malformed URL escapes return 400, not 500', async () => {
 
 test('server binds to loopback by default', () => {
   assert.match(startupLine, /http:\/\/127\.0\.0\.1:3999/);
+});
+
+const seed = async (date, items) => {
+  for (const [title, start, end] of items) {
+    assert.equal((await call('/entries', 'POST', { date, title, start, end })).status, 201);
+  }
+};
+const gen = (date, start, tasks, extra = {}) =>
+  call('/generate', 'POST', { date, start, breakMinutes: 10, replace: false, tasks, ...extra });
+
+test('fit-around: exact-fit gap and adjacent entries do not conflict', async () => {
+  await seed('2030-04-01', [['Before', '09:00', '10:00'], ['After', '11:00', '12:00']]);
+  const res = await gen('2030-04-01', '09:00', [{ title: 'Exact', minutes: 60 }]);
+  assert.equal(res.status, 201);
+  assert.deepEqual(brief(res.data.entries), [
+    ['Before', '09:00', '10:00'], ['Exact', '10:00', '11:00'], ['After', '11:00', '12:00'],
+  ]);
+  assert.deepEqual(res.data.unscheduled, []);
+});
+
+test('fit-around: entries before the start are ignored; an entry spanning the start pushes the task after it', async () => {
+  await seed('2030-04-02', [['Early', '07:00', '08:00'], ['Spanning', '08:00', '10:00']]);
+  const res = await gen('2030-04-02', '09:00', [{ title: 'T', minutes: 30 }]);
+  assert.deepEqual(brief(res.data.entries), [
+    ['Early', '07:00', '08:00'], ['Spanning', '08:00', '10:00'], ['T', '10:00', '10:30'],
+  ]);
+});
+
+test('fit-around: a task bigger than every gap is skipped while a later smaller one is placed', async () => {
+  await seed('2030-04-03', [['Block', '10:00', '12:00'], ['Evening', '12:30', '24:00']]);
+  const res = await gen('2030-04-03', '09:00', [
+    { title: 'Big', minutes: 120, priority: 1 },
+    { title: 'Small', minutes: 30, priority: 2 },
+  ]);
+  assert.equal(res.status, 201);
+  assert.deepEqual(brief(res.data.entries).filter((e) => !['Block', 'Evening'].includes(e[0])), [['Small', '09:00', '09:30']]);
+  assert.deepEqual(res.data.unscheduled, [{ title: 'Big', minutes: 120, reason: 'no free gap long enough at or after 09:00' }]);
+});
+
+test('fit-around: a fully booked day returns 400 and saves nothing', async () => {
+  await seed('2030-04-04', [['All day', '00:00', '24:00']]);
+  const res = await gen('2030-04-04', '09:00', [{ title: 'A', minutes: 30 }]);
+  assert.equal(res.status, 400);
+  assert.match(res.data.error, /No task fits in the free time at or after 09:00/);
+  assert.deepEqual(res.data.unscheduled.map((u) => u.title), ['A']);
+  assert.deepEqual(brief((await call('/entries?date=2030-04-04')).data), [['All day', '00:00', '24:00']]);
+});
+
+test('replace on ignores existing entries and deletes them', async () => {
+  await seed('2030-04-05', [['Old', '09:00', '10:00']]);
+  const res = await gen('2030-04-05', '09:00', [{ title: 'New', minutes: 30 }], { replace: true });
+  assert.deepEqual(brief(res.data.entries), [['New', '09:00', '09:30']]);
+});
+
+test('fit-around: no break next to existing entries, break between adjacent generated tasks', async () => {
+  await seed('2030-04-06', [['Meeting', '10:00', '11:00']]);
+  const res = await gen('2030-04-06', '09:00', [
+    { title: 'A', minutes: 60, priority: 1 },
+    { title: 'B', minutes: 30, priority: 2 },
+    { title: 'C', minutes: 30, priority: 3 },
+  ]);
+  assert.deepEqual(brief(res.data.entries), [
+    ['A', '09:00', '10:00'],
+    ['Meeting', '10:00', '11:00'],
+    ['B', '11:00', '11:30'],
+    ['Break', '11:30', '11:40'],
+    ['C', '11:40', '12:10'],
+  ]);
+});
+
+test('omitted replace behaves as false (fit around)', async () => {
+  await seed('2030-04-07', [['Keep', '09:00', '10:00']]);
+  const res = await call('/generate', 'POST', { date: '2030-04-07', start: '09:00', tasks: [{ title: 'T', minutes: 30 }] });
+  assert.deepEqual(brief(res.data.entries), [['Keep', '09:00', '10:00'], ['T', '10:00', '10:30']]);
 });
