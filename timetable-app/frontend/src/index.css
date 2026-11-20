@@ -9,6 +9,12 @@
   body {
     @apply min-h-screen bg-slate-950 text-slate-100 antialiased;
   }
+  /* `color-scheme: dark` on the <select> isn't enough in Chromium: the options
+     popup still renders with its native light panel unless each <option> is
+     given an explicit background/text colour. */
+  select option {
+    @apply bg-slate-800 text-slate-100;
+  }
 }
 
 @media print {
