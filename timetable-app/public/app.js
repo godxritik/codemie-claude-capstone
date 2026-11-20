@@ -23,32 +23,123 @@ function showMessage(text, kind = '') {
   messageEl.hidden = !text;
 }
 
-async function api(path, options = {}) {
-  const res = await fetch(`/api${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-  if (res.status === 204) return null;
-  const data = await res.json();
-  if (!res.ok) {
-    const err = new Error(data.error || 'Request failed');
-    err.status = res.status;
-    err.body = data;
-    throw err;
+class ApiError extends Error {
+  constructor(message, status, body = {}) {
+    super(message);
+    this.status = status;
+    this.body = body;
   }
+}
+
+// Returns parsed JSON (null for 204); throws ApiError for network and HTTP errors.
+async function api(path, options = {}) {
+  let res;
+  try {
+    res = await fetch(`/api${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch {
+    throw new ApiError('Could not reach the server. Check that it is running.', 0);
+  }
+  if (res.status === 204) return null;
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw new ApiError(`Request failed (${res.status})`, res.status);
+  }
+  if (!res.ok) throw new ApiError(data.error || `Request failed (${res.status})`, res.status, data);
   return data;
 }
 
-const run = async (fn) => {
-  try {
-    await fn();
-  } catch (e) {
-    showMessage(e.message);
-    return false;
+const scheduleErrorEl = $('#schedule-error');
+const flagged = new WeakMap(); // error region -> { el, prev } of the field it flagged
+
+// Empties the region and removes the invalid state it put on a field.
+function clearError(region) {
+  region.replaceChildren();
+  const f = flagged.get(region);
+  if (!f) return;
+  f.el.removeAttribute('aria-invalid');
+  if (f.prev) f.el.setAttribute('aria-describedby', f.prev);
+  else f.el.removeAttribute('aria-describedby');
+  flagged.delete(region);
+}
+
+// Shows err in the region (role=alert announces it). resolve(field) maps a server field to an
+// element to mark invalid and focus; without one the region itself takes focus.
+function showError(region, err, resolve = () => null, { focus = true } = {}) {
+  clearError(region);
+  region.append(document.createTextNode(err.message));
+  const skipped = err.body?.unscheduled ?? [];
+  if (skipped.length) {
+    const ul = document.createElement('ul');
+    for (const u of skipped) {
+      const li = document.createElement('li');
+      li.textContent = `"${u.title}" (${u.minutes} min): ${u.reason}`;
+      ul.append(li);
+    }
+    region.append(ul);
+  }
+  const el = err.body?.field ? resolve(err.body.field) : err.el ?? null;
+  if (el) {
+    const prev = el.getAttribute('aria-describedby');
+    el.setAttribute('aria-invalid', 'true');
+    el.setAttribute('aria-describedby', prev ? `${region.id} ${prev}` : region.id);
+    flagged.set(region, { el, prev });
+    if (focus) el.focus();
+  } else if (focus) {
+    region.focus();
+  }
+}
+
+// Maps a server error field to a control of the form (null when unknown).
+function resolveField(form, field) {
+  if (field === 'date') return dateInput;
+  if (field === 'tasks') return $('#add-task');
+  const task = /^tasks\[(\d+)\](?:\.(\w+))?$/.exec(field);
+  if (task) return taskRows.children[Number(task[1])]?.querySelector(`[name=${task[2] ?? 'title'}]`) ?? null;
+  const el = form.elements.namedItem(field);
+  return el instanceof Element ? el : null;
+}
+
+const fieldLabel = (el) =>
+  el.getAttribute('aria-label') || el.closest('label')?.firstChild?.textContent.trim() || el.name;
+
+// Constraint check for novalidate forms. Shows the first problem in the region and returns false.
+function validateForm(form, region) {
+  for (const el of form.elements) {
+    if (el.willValidate && !el.checkValidity()) {
+      showError(region, { message: `${fieldLabel(el)}: ${el.validationMessage}`, el });
+      return false;
+    }
   }
   return true;
+}
+
+// Typing in a field flagged invalid clears its error.
+const clearOnInput = (ev) => {
+  const el = ev.target;
+  if (el.getAttribute?.('aria-invalid') !== 'true') return;
+  const region = document.getElementById(el.getAttribute('aria-describedby')?.split(' ')[0]);
+  if (region) clearError(region);
 };
+document.addEventListener('input', clearOnInput);
+document.addEventListener('change', clearOnInput);
+
+// Runs a user-initiated schedule action (toggle, delete, clear day, day navigation).
+async function runSchedule(fn, { focus = true } = {}) {
+  clearError(scheduleErrorEl);
+  try {
+    await fn();
+    return true;
+  } catch (e) {
+    showError(scheduleErrorEl, e, undefined, { focus });
+    return false;
+  }
+}
 
 function render(entries = currentEntries) {
   currentEntries = entries;
@@ -89,12 +180,13 @@ function render(entries = currentEntries) {
     check.type = 'checkbox';
     check.checked = e.done;
     check.setAttribute('aria-label', `Mark "${e.title}" done`);
-    check.addEventListener('change', () =>
-      run(async () => {
+    check.addEventListener('change', async () => {
+      const ok = await runSchedule(async () => {
         await api(`/entries/${e.id}`, { method: 'PATCH', body: { done: check.checked } });
         await load();
-      }),
-    );
+      });
+      if (!ok) check.checked = !check.checked;
+    });
     const edit = document.createElement('button');
     edit.className = 'secondary small edit';
     edit.textContent = 'Edit';
@@ -105,7 +197,7 @@ function render(entries = currentEntries) {
     del.textContent = 'Delete';
     del.setAttribute('aria-label', `Delete "${e.title}"`);
     del.addEventListener('click', () =>
-      run(async () => {
+      runSchedule(async () => {
         await api(`/entries/${e.id}`, { method: 'DELETE' });
         await load();
       }),
@@ -220,7 +312,8 @@ function setBusy(form, busy) {
 // Sends only the changed fields (never `done`); on error the form stays open and the entry unchanged.
 async function saveEdit(form, entry) {
   const region = form.querySelector('.form-error');
-  region.textContent = '';
+  clearError(region);
+  if (!validateForm(form, region)) return;
   const changes = {};
   for (const k of ['title', 'start', 'end', 'category']) {
     let v = form.elements[k].value;
@@ -239,10 +332,9 @@ async function saveEdit(form, entry) {
     if (e.status === 404) {
       editingId = null;
       await load();
-      showMessage(e.message);
+      showError(scheduleErrorEl, e);
     } else {
-      region.textContent = e.message;
-      region.focus();
+      showError(region, e, (f) => resolveField(form, f));
     }
   } finally {
     setBusy(form, false);
@@ -285,7 +377,7 @@ function shiftDay(days) {
   d.setDate(d.getDate() + days);
   dateInput.value = toISODate(d);
   showMessage('');
-  run(load);
+  runSchedule(load);
 }
 
 $('#prev-day').addEventListener('click', () => shiftDay(-1));
@@ -293,28 +385,34 @@ $('#next-day').addEventListener('click', () => shiftDay(1));
 $('#today').addEventListener('click', () => {
   dateInput.value = toISODate(new Date());
   showMessage('');
-  run(load);
+  runSchedule(load);
 });
 dateInput.addEventListener('change', () => {
   showMessage('');
-  run(load);
+  runSchedule(load);
 });
 
 $('#add-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const form = ev.target;
+  const region = $('#add-error');
+  clearError(region);
+  if (!validateForm(form, region)) return;
   const f = new FormData(form);
-  const ok = await run(async () => {
+  setBusy(form, true);
+  try {
     await api('/entries', {
       method: 'POST',
       body: { date: dateInput.value, title: f.get('title'), start: f.get('start'), end: f.get('end'), category: f.get('category') },
     });
-    await load();
-  });
-  if (ok) {
     showMessage('');
     form.reset();
     form.category.value = 'general';
+    await load();
+  } catch (e) {
+    showError(region, e, (field) => resolveField(form, field));
+  } finally {
+    setBusy(form, false);
   }
 });
 
@@ -322,7 +420,12 @@ $('#add-task').addEventListener('click', addTaskRow);
 
 $('#gen-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
-  const f = new FormData(ev.target);
+  const form = ev.target;
+  const region = $('#gen-error');
+  clearError(region);
+  showMessage('');
+  if (!validateForm(form, region)) return;
+  const f = new FormData(form);
   const replace = f.get('replace') === 'on';
   if (replace && scheduleEl.children.length && !confirm('This will replace everything planned for this day. Continue?')) return;
   const tasks = [...taskRows.children].map((row) => ({
@@ -332,6 +435,7 @@ $('#gen-form').addEventListener('submit', async (ev) => {
     category: row.querySelector('[name=category]').value,
   }));
   const describe = (u) => `"${u.title}" (${u.minutes} min, ${u.reason})`;
+  setBusy(form, true);
   try {
     const res = await api('/generate', {
       method: 'POST',
@@ -346,14 +450,15 @@ $('#gen-form').addEventListener('submit', async (ev) => {
       showMessage('Timetable generated.', 'ok');
     }
   } catch (e) {
-    const skipped = e.body?.unscheduled ?? [];
-    showMessage(skipped.length ? `${e.message}: ${skipped.map(describe).join('; ')}` : e.message);
+    showError(region, e, (field) => resolveField(form, field));
+  } finally {
+    setBusy(form, false);
   }
 });
 
 $('#clear-day').addEventListener('click', () => {
   if (!scheduleEl.children.length || !confirm('Delete all entries for this day?')) return;
-  run(async () => {
+  runSchedule(async () => {
     await api(`/day?date=${dateInput.value}`, { method: 'DELETE' });
     showMessage('');
     await load();
@@ -362,10 +467,14 @@ $('#clear-day').addEventListener('click', () => {
 
 (async function init() {
   dateInput.value = toISODate(new Date());
-  await run(async () => {
-    categories = await api('/categories');
-    fillCategories($('#add-form').category);
-    addTaskRow();
-    await load();
-  });
+  // Initial load errors are shown but must not steal focus on page load.
+  await runSchedule(
+    async () => {
+      categories = await api('/categories');
+      fillCategories($('#add-form').category);
+      addTaskRow();
+      await load();
+    },
+    { focus: false },
+  );
 })();

@@ -364,3 +364,28 @@ test('omitted replace behaves as false (fit around)', async () => {
   const res = await call('/generate', 'POST', { date: '2030-04-07', start: '09:00', tasks: [{ title: 'T', minutes: 30 }] });
   assert.deepEqual(brief(res.data.entries), [['Keep', '09:00', '10:00'], ['T', '10:00', '10:30']]);
 });
+
+test('error responses carry an optional field hint', async () => {
+  const fieldOf = async (path, method, body) => (await call(path, method, body)).data.field;
+  const ok = { date: DATE, title: 'F', start: '05:00', end: '05:30' };
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, title: '' }), 'title');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, start: '5am' }), 'start');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, start: '24:00', end: '24:00' }), 'start');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, end: '99:00' }), 'end');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, end: '05:00' }), 'end');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, category: 'nope' }), 'category');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, date: '2030-02-31' }), 'date');
+  const t = (task) => ({ date: DATE, tasks: [{ title: 'OK', minutes: 30 }, task] });
+  assert.equal(await fieldOf('/generate', 'POST', t(null)), 'tasks[1]');
+  assert.equal(await fieldOf('/generate', 'POST', t({ title: '', minutes: 30 })), 'tasks[1].title');
+  assert.equal(await fieldOf('/generate', 'POST', t({ title: 'x', minutes: 1 })), 'tasks[1].minutes');
+  assert.equal(await fieldOf('/generate', 'POST', t({ title: 'x', minutes: 30, priority: 9 })), 'tasks[1].priority');
+  assert.equal(await fieldOf('/generate', 'POST', t({ title: 'x', minutes: 30, category: 'bad' })), 'tasks[1].category');
+  assert.equal(await fieldOf('/generate', 'POST', { date: DATE, breakMinutes: 500, tasks: [{ title: 'x', minutes: 30 }] }), 'breakMinutes');
+  assert.equal(await fieldOf('/generate', 'POST', { date: DATE, replace: 'no', tasks: [{ title: 'x', minutes: 30 }] }), 'replace');
+  // field-less errors (overlap) omit it
+  await call('/entries', 'POST', { date: '2030-05-01', title: 'A', start: '09:00', end: '10:00' });
+  const clash = await call('/entries', 'POST', { date: '2030-05-01', title: 'B', start: '09:30', end: '10:30' });
+  assert.equal(clash.status, 409);
+  assert.equal('field' in clash.data, false);
+});

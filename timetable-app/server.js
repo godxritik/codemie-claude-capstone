@@ -39,19 +39,19 @@ class HttpError extends Error {
 }
 
 // Minutes 0..1439; 1440 (24:00) only when allowEnd24 is set (end times).
-const parseTime = (s, { allowEnd24 = false } = {}) => {
+const parseTime = (s, { allowEnd24 = false, field } = {}) => {
   const str = String(s);
   if (str === '24:00') {
     if (allowEnd24) return 24 * 60;
-    throw new HttpError(400, '24:00 is only allowed as an end time');
+    throw new HttpError(400, '24:00 is only allowed as an end time', { field });
   }
   const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(str);
-  if (!m) throw new HttpError(400, `Invalid time "${s}", expected HH:MM`);
+  if (!m) throw new HttpError(400, `Invalid time "${s}", expected HH:MM`, { field });
   return Number(m[1]) * 60 + Number(m[2]);
 };
 
 // Accepts only real calendar dates (rejects 2030-02-31, month 13, ...).
-const parseDate = (s) => {
+const parseDate = (s, field = 'date') => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s));
   if (m) {
     const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
@@ -59,7 +59,7 @@ const parseDate = (s) => {
     dt.setUTCFullYear(y, mo - 1, d); // not Date.UTC: it maps years 0-99 to 1900-1999
     if (dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d) return s;
   }
-  throw new HttpError(400, `Invalid date "${s}", expected YYYY-MM-DD`);
+  throw new HttpError(400, `Invalid date "${s}", expected YYYY-MM-DD`, { field });
 };
 
 const fmt = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
@@ -74,23 +74,23 @@ const toDto = (r) => ({
   done: !!r.done,
 });
 
-const parseTitle = (t) => {
+const parseTitle = (t, field = 'title') => {
   const title = String(t ?? '').trim();
-  if (!title) throw new HttpError(400, 'Title is required');
-  if (title.length > 100) throw new HttpError(400, 'Title must be 100 characters or fewer');
+  if (!title) throw new HttpError(400, 'Title is required', { field });
+  if (title.length > 100) throw new HttpError(400, 'Title must be 100 characters or fewer', { field });
   return title;
 };
 
-const parseCategory = (c) => {
+const parseCategory = (c, field = 'category') => {
   const category = c ?? 'general';
-  if (!CATEGORIES.includes(category)) throw new HttpError(400, `Category must be one of: ${CATEGORIES.join(', ')}`);
+  if (!CATEGORIES.includes(category)) throw new HttpError(400, `Category must be one of: ${CATEGORIES.join(', ')}`, { field });
   return category;
 };
 
 // Optional boolean: undefined passes through, anything but true/false is a 400.
 const requireBoolean = (value, field) => {
   if (value === undefined) return undefined;
-  if (typeof value !== 'boolean') throw new HttpError(400, `${field} must be true or false`);
+  if (typeof value !== 'boolean') throw new HttpError(400, `${field} must be true or false`, { field });
   return value;
 };
 
@@ -112,9 +112,9 @@ function createEntry(body) {
   const date = parseDate(body.date);
   const title = parseTitle(body.title);
   const category = parseCategory(body.category);
-  const startMin = parseTime(body.start);
-  const endMin = parseTime(body.end, { allowEnd24: true });
-  if (endMin <= startMin) throw new HttpError(400, 'End time must be after start time');
+  const startMin = parseTime(body.start, { field: 'start' });
+  const endMin = parseTime(body.end, { allowEnd24: true, field: 'end' });
+  if (endMin <= startMin) throw new HttpError(400, 'End time must be after start time', { field: 'end' });
   const clash = findOverlap(date, startMin, endMin);
   if (clash) throw new HttpError(409, `Overlaps with "${clash.title}" (${fmt(clash.start_min)}-${fmt(clash.end_min)})`);
   const info = db
@@ -128,11 +128,11 @@ function updateEntry(id, body) {
   if (!row) throw new HttpError(404, 'Entry not found');
   const title = body.title !== undefined ? parseTitle(body.title) : row.title;
   const category = body.category !== undefined ? parseCategory(body.category) : row.category;
-  const startMin = body.start !== undefined ? parseTime(body.start) : row.start_min;
-  const endMin = body.end !== undefined ? parseTime(body.end, { allowEnd24: true }) : row.end_min;
+  const startMin = body.start !== undefined ? parseTime(body.start, { field: 'start' }) : row.start_min;
+  const endMin = body.end !== undefined ? parseTime(body.end, { allowEnd24: true, field: 'end' }) : row.end_min;
   const doneFlag = requireBoolean(body.done, 'done');
   const done = doneFlag === undefined ? row.done : doneFlag ? 1 : 0;
-  if (endMin <= startMin) throw new HttpError(400, 'End time must be after start time');
+  if (endMin <= startMin) throw new HttpError(400, 'End time must be after start time', { field: 'end' });
   const clash = findOverlap(row.date, startMin, endMin, id);
   if (clash) throw new HttpError(409, `Overlaps with "${clash.title}" (${fmt(clash.start_min)}-${fmt(clash.end_min)})`);
   db.prepare('UPDATE entries SET title = ?, category = ?, start_min = ?, end_min = ?, done = ? WHERE id = ?').run(
@@ -144,13 +144,13 @@ function updateEntry(id, body) {
 // Places tasks from `start`, highest priority first, in free time (see scheduler.js); skipped tasks are reported.
 function generateTimetable(body) {
   const date = parseDate(body.date);
-  const startMin = parseTime(body.start ?? '09:00');
+  const startMin = parseTime(body.start ?? '09:00', { field: 'start' });
   const breakMin = Number(body.breakMinutes ?? 10);
   if (!Number.isInteger(breakMin) || breakMin < 0 || breakMin > 120) {
-    throw new HttpError(400, 'Break must be a whole number of minutes between 0 and 120');
+    throw new HttpError(400, 'Break must be a whole number of minutes between 0 and 120', { field: 'breakMinutes' });
   }
-  if (!Array.isArray(body.tasks) || body.tasks.length === 0) throw new HttpError(400, 'Add at least one task');
-  if (body.tasks.length > 50) throw new HttpError(400, 'At most 50 tasks per timetable');
+  if (!Array.isArray(body.tasks) || body.tasks.length === 0) throw new HttpError(400, 'Add at least one task', { field: 'tasks' });
+  if (body.tasks.length > 50) throw new HttpError(400, 'At most 50 tasks per timetable', { field: 'tasks' });
 
   const replace = requireBoolean(body.replace, 'replace') ?? false;
 
@@ -158,21 +158,24 @@ function generateTimetable(body) {
     try {
       return fn();
     } catch (e) {
-      if (e instanceof HttpError) throw new HttpError(e.status, `Task ${i + 1}: ${e.message}`);
+      if (e instanceof HttpError) throw new HttpError(e.status, `Task ${i + 1}: ${e.message}`, e.extra);
       throw e;
     }
   };
   const tasks = body.tasks.map((t, i) => {
-    if (t === null || typeof t !== 'object' || Array.isArray(t)) throw new HttpError(400, `Task ${i + 1}: must be an object`);
+    const at = (k) => `tasks[${i}]${k ? `.${k}` : ''}`;
+    if (t === null || typeof t !== 'object' || Array.isArray(t)) {
+      throw new HttpError(400, `Task ${i + 1}: must be an object`, { field: at() });
+    }
     const minutes = Number(t.minutes);
     if (!Number.isInteger(minutes) || minutes < 5 || minutes > 480) {
-      throw new HttpError(400, `Task ${i + 1}: duration must be 5-480 minutes`);
+      throw new HttpError(400, `Task ${i + 1}: duration must be 5-480 minutes`, { field: at('minutes') });
     }
     const priority = Number(t.priority ?? 2);
-    if (![1, 2, 3].includes(priority)) throw new HttpError(400, `Task ${i + 1}: priority must be 1 (high), 2 or 3 (low)`);
+    if (![1, 2, 3].includes(priority)) throw new HttpError(400, `Task ${i + 1}: priority must be 1 (high), 2 or 3 (low)`, { field: at('priority') });
     return {
-      title: withPrefix(i, () => parseTitle(t.title)),
-      category: withPrefix(i, () => parseCategory(t.category)),
+      title: withPrefix(i, () => parseTitle(t.title, at('title'))),
+      category: withPrefix(i, () => parseCategory(t.category, at('category'))),
       minutes,
       priority,
       order: i,
