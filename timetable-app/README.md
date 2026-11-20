@@ -5,7 +5,8 @@ into a timetable (highest priority first, with breaks in between).
 
 ## Requirements
 
-- Node.js 22.5 or newer (uses the built-in `node:sqlite`; no `npm install` needed)
+- Node.js 22.5 or newer (uses the built-in `node:sqlite`; no `npm install` needed to run the server)
+- The frontend is pre-built into `public/`; you only need Node+npm in `frontend/` if you're changing the UI
 
 ## Run
 
@@ -23,18 +24,38 @@ database location (default `data/timetable.db`, created on first run). `HOST` de
 npm test
 ```
 
+## Frontend development
+
+The UI is a React + Tailwind app in `frontend/`, built with Vite into `public/` (which `server.js`
+serves as static files; `server.js` itself is unaware of React/Vite). To change the UI:
+
+```bash
+cd frontend
+npm install
+npm run dev      # dev server on :5173, proxies /api to http://127.0.0.1:3000 (run `npm start` in another terminal)
+npm run build    # rebuilds public/ for `npm start` to serve
+```
+
+Commit the rebuilt `public/` output together with your `frontend/src` changes so `npm start` keeps
+working without an install.
+
 ## Features
 
-- Day view with previous/next/today navigation
-- Add, edit, delete and tick off entries (categories: work, study, health, personal, break, general)
+- Day and week views; the week view shows per-day entry count, planned minutes and done count (breaks excluded)
+- Add, edit, delete and tick off entries (categories: work, study, health, personal, break, general),
+  each identifiable by text/icon as well as colour
 - Overlapping entries are rejected
 - Generate a timetable from tasks (duration, priority, category), a start time and break length.
   By default tasks are placed around the day's existing entries; with `replace` the day is cleared first
 - Tasks that do not fit are skipped and reported (title, minutes, reason) instead of failing the request
+- Save a task list as a named template and reload it later; copy a whole day to another date
+- Time-by-category breakdown for the selected day (breaks included), with a share of the planned time
+- Export the selected day as CSV, or print it (print styles hide the forms and controls)
 - Input validation: real calendar dates, `HH:MM` times, titles 1-100 characters, task duration 5-480
   minutes, break 0-120 minutes, at most 50 tasks. `24:00` is accepted as an end time only
-- Known limitations: the UI has not been verified in a browser (see `docs/testing.md`); generate still
-  accepts a boolean `priority` (coerced to a number); a JSON array body gets a misleading error message
+- Known limitations: the UI has not been verified in a real browser (no browser tooling was available
+  while building it — see `docs/testing.md`); generate still accepts a boolean `priority` (coerced to a
+  number); a JSON array body gets a misleading error message
 
 ## API
 
@@ -64,6 +85,10 @@ Notes:
 
 ```
 server.js     HTTP server, REST API, SQLite storage
-public/       Frontend (HTML, CSS, vanilla JS)
-test/         API tests (node:test)
+scheduler.js  Pure task-placement logic used by /api/generate
+summary.js    Pure week/category summary helpers
+export.js     CSV builder for /api/export
+frontend/     React + Tailwind UI source (Vite); builds into public/
+public/       Built frontend (served as static files; generated, do not hand-edit)
+test/         API and unit tests (node:test)
 ```
