@@ -7,6 +7,8 @@ const messageEl = $('#message');
 const progressEl = $('#progress');
 const taskRows = $('#task-rows');
 let categories = [];
+let currentEntries = []; // last list from GET or generate
+let editingId = null; // id of the entry in edit mode, or null
 
 const toISODate = (d) => {
   const p = (n) => String(n).padStart(2, '0');
@@ -47,7 +49,8 @@ const run = async (fn) => {
   return true;
 };
 
-function render(entries) {
+function render(entries = currentEntries) {
+  currentEntries = entries;
   scheduleEl.replaceChildren();
   emptyEl.hidden = entries.length > 0;
   const tasks = entries.filter((e) => e.category !== 'break');
@@ -58,6 +61,13 @@ function render(entries) {
     const li = document.createElement('li');
     li.className = `entry cat-${e.category}${e.done ? ' done' : ''}`;
     li.dataset.id = e.id;
+
+    if (e.id === editingId) {
+      li.classList.add('editing');
+      renderEditForm(li, e);
+      scheduleEl.append(li);
+      continue;
+    }
 
     const time = document.createElement('span');
     time.className = 'time';
@@ -84,16 +94,22 @@ function render(entries) {
         await load();
       }),
     );
+    const edit = document.createElement('button');
+    edit.className = 'secondary small edit';
+    edit.textContent = 'Edit';
+    edit.setAttribute('aria-label', `Edit "${e.title}"`);
+    edit.addEventListener('click', () => openEdit(e.id));
     const del = document.createElement('button');
     del.className = 'danger small';
     del.textContent = 'Delete';
+    del.setAttribute('aria-label', `Delete "${e.title}"`);
     del.addEventListener('click', () =>
       run(async () => {
         await api(`/entries/${e.id}`, { method: 'DELETE' });
         await load();
       }),
     );
-    actions.append(check, del);
+    actions.append(check, edit, del);
 
     li.append(time, title, actions);
     scheduleEl.append(li);
@@ -102,7 +118,105 @@ function render(entries) {
 
 async function load() {
   const entries = await api(`/entries?date=${dateInput.value}`);
+  if (editingId !== null && !entries.some((e) => e.id === editingId)) editingId = null;
   render(entries);
+}
+
+// Builds a labelled control; the label wraps the input like the other forms.
+function labelled(text, control) {
+  const label = document.createElement('label');
+  label.append(text, control);
+  return label;
+}
+
+function renderEditForm(li, entry) {
+  const form = document.createElement('form');
+  form.className = 'edit-form';
+  form.noValidate = true;
+  form.setAttribute('aria-label', `Edit "${entry.title}"`);
+
+  const error = document.createElement('div');
+  error.id = `edit-error-${entry.id}`;
+  error.className = 'form-error';
+  error.setAttribute('role', 'alert');
+  error.tabIndex = -1;
+
+  const title = document.createElement('input');
+  title.name = 'title';
+  title.required = true;
+  title.maxLength = 100;
+  title.value = entry.title;
+
+  const start = document.createElement('input');
+  start.type = 'time';
+  start.name = 'start';
+  start.required = true;
+  start.value = entry.start;
+
+  // A native time input cannot hold 24:00, so a full-day end is edited as text.
+  const end = document.createElement('input');
+  end.name = 'end';
+  end.required = true;
+  const hint = document.createElement('small');
+  if (entry.end === '24:00') {
+    end.type = 'text';
+    end.inputMode = 'numeric';
+    end.placeholder = 'HH:MM';
+    end.pattern = '([01][0-9]|2[0-3]):[0-5][0-9]|24:00';
+    hint.id = `edit-end-hint-${entry.id}`;
+    hint.className = 'muted';
+    hint.textContent = 'HH:MM, 24:00 = midnight';
+    end.setAttribute('aria-describedby', hint.id);
+  } else {
+    end.type = 'time';
+  }
+  end.value = entry.end;
+
+  const category = document.createElement('select');
+  category.name = 'category';
+  for (const c of categories) category.add(new Option(c, c));
+  category.value = entry.category;
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  const endLabel = labelled('End', end);
+  if (hint.id) endLabel.append(hint);
+  row.append(labelled('Start', start), endLabel);
+
+  const actions = document.createElement('div');
+  actions.className = 'edit-actions';
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.textContent = 'Save';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'secondary';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', () => cancelEdit(entry.id));
+  actions.append(save, cancel);
+
+  form.append(error, labelled('Title', title), row, labelled('Category', category), actions);
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault(); // saving is wired up in the next change
+  });
+  li.append(form);
+}
+
+function focusEditButton(id) {
+  scheduleEl.querySelector(`li[data-id="${id}"] .edit`)?.focus();
+}
+
+// Only one entry is editable at a time; opening another discards the first without saving.
+function openEdit(id) {
+  editingId = id;
+  render();
+  scheduleEl.querySelector(`li[data-id="${id}"] [name=title]`)?.focus();
+}
+
+function cancelEdit(id) {
+  editingId = null;
+  render();
+  focusEditButton(id);
 }
 
 function fillCategories(select) {
@@ -176,6 +290,7 @@ $('#gen-form').addEventListener('submit', async (ev) => {
       method: 'POST',
       body: { date: dateInput.value, start: f.get('start'), breakMinutes: Number(f.get('breakMinutes')), tasks, replace },
     });
+    editingId = null;
     render(res.entries);
     // Task rows are kept on purpose so skipped tasks can be adjusted.
     if (res.unscheduled.length) {
