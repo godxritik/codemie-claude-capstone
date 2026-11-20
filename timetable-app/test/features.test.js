@@ -114,3 +114,35 @@ test('copy: non-empty target gives 409 with count and writes nothing; replace sw
   assert.equal(ok.status, 201);
   assert.deepEqual((await call('/entries?date=2031-03-02')).data.map((e) => e.title), ['S']);
 });
+
+// ---- TIME-8 week overview ----
+
+test('summary: per-day figures exclude breaks and empty days are zero', async () => {
+  const a = (await add('2032-03-01', 'A', '09:00', '10:00', 'work')).data;
+  await add('2032-03-01', 'B', '10:00', '10:30', 'study');
+  await add('2032-03-01', 'Break', '10:30', '10:45', 'break');
+  await call(`/entries/${a.id}`, 'PATCH', { done: true });
+  const res = await call('/summary?from=2032-03-01&to=2032-03-07');
+  assert.equal(res.status, 200);
+  assert.equal(res.data.days.length, 7);
+  const mon = res.data.days[0];
+  assert.deepEqual([mon.date, mon.count, mon.minutes, mon.done], ['2032-03-01', 2, 90, 1]);
+  const empty = res.data.days[3];
+  assert.deepEqual([empty.date, empty.count, empty.minutes, empty.done], ['2032-03-04', 0, 0, 0]);
+});
+
+test('summary: ranges across month and year boundaries', async () => {
+  const res = await call('/summary?from=2031-12-30&to=2032-01-02');
+  assert.deepEqual(res.data.days.map((d) => d.date), ['2031-12-30', '2031-12-31', '2032-01-01', '2032-01-02']);
+  const leap = await call('/summary?from=2032-02-28&to=2032-03-01');
+  assert.deepEqual(leap.data.days.map((d) => d.date), ['2032-02-28', '2032-02-29', '2032-03-01']);
+});
+
+test('summary: validation and 31-day limit', async () => {
+  assert.equal((await call('/summary?from=2032-03-01&to=2032-03-31')).status, 200); // 31 days
+  assert.equal((await call('/summary?from=2032-03-01&to=2032-04-01')).status, 400); // 32 days
+  assert.equal((await call('/summary?from=2032-03-05&to=2032-03-01')).status, 400);
+  assert.equal((await call('/summary?from=2032-02-31&to=2032-03-01')).status, 400);
+  assert.equal((await call('/summary?from=2032-03-01')).status, 400);
+  assert.equal((await call('/summary')).status, 400);
+});

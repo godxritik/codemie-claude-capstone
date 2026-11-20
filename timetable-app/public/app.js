@@ -214,7 +214,64 @@ async function load() {
   const entries = await api(`/entries?date=${dateInput.value}`);
   if (editingId !== null && !entries.some((e) => e.id === editingId)) editingId = null;
   render(entries);
+  await refreshWeek();
 }
+
+// --- Week overview ---
+const weekDaysEl = $('#week-days');
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+let weekStart = null; // ISO date of the Monday of the shown week
+
+// Local-date arithmetic (as shiftDay does) so month/year boundaries and DST are safe.
+const addDays = (iso, n) => {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return toISODate(d);
+};
+const mondayOf = (iso) => addDays(iso, -((new Date(`${iso}T00:00:00`).getDay() + 6) % 7));
+
+async function refreshWeek() {
+  if (!weekStart) weekStart = mondayOf(dateInput.value);
+  const res = await api(`/summary?from=${weekStart}&to=${addDays(weekStart, 6)}`);
+  const today = toISODate(new Date());
+  $('#week-range').textContent = `${weekStart} to ${addDays(weekStart, 6)}`;
+  weekDaysEl.replaceChildren();
+  for (const day of res.days) {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.setAttribute('aria-pressed', String(day.date === dateInput.value));
+    const name = document.createElement('span');
+    name.textContent = `${DAY_NAMES[new Date(`${day.date}T00:00:00`).getDay()]} ${day.date.slice(5)}`;
+    btn.append(name);
+    if (day.date === today) {
+      const mark = document.createElement('span');
+      mark.className = 'today-mark';
+      mark.textContent = 'Today';
+      btn.append(mark);
+    }
+    for (const text of [`${day.count} ${day.count === 1 ? 'entry' : 'entries'}`, `${day.minutes} min`, `${day.done} done`]) {
+      const line = document.createElement('span');
+      line.textContent = text;
+      btn.append(line);
+    }
+    btn.addEventListener('click', () => {
+      dateInput.value = day.date;
+      weekStart = mondayOf(day.date);
+      showMessage('');
+      runSchedule(load);
+    });
+    li.append(btn);
+    weekDaysEl.append(li);
+  }
+}
+
+function shiftWeek(n) {
+  weekStart = addDays(weekStart ?? mondayOf(dateInput.value), 7 * n);
+  runSchedule(refreshWeek);
+}
+$('#prev-week').addEventListener('click', () => shiftWeek(-1));
+$('#next-week').addEventListener('click', () => shiftWeek(1));
 
 // Builds a labelled control; the label wraps the input like the other forms.
 function labelled(text, control) {
@@ -385,6 +442,7 @@ function shiftDay(days) {
   const d = new Date(`${dateInput.value}T00:00:00`);
   d.setDate(d.getDate() + days);
   dateInput.value = toISODate(d);
+  weekStart = mondayOf(dateInput.value);
   showMessage('');
   runSchedule(load);
 }
@@ -393,10 +451,12 @@ $('#prev-day').addEventListener('click', () => shiftDay(-1));
 $('#next-day').addEventListener('click', () => shiftDay(1));
 $('#today').addEventListener('click', () => {
   dateInput.value = toISODate(new Date());
+  weekStart = mondayOf(dateInput.value);
   showMessage('');
   runSchedule(load);
 });
 dateInput.addEventListener('change', () => {
+  if (dateInput.value) weekStart = mondayOf(dateInput.value);
   showMessage('');
   runSchedule(load);
 });

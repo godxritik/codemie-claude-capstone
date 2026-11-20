@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { planTasks } from './scheduler.js';
+import { buildSummary } from './summary.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -267,6 +268,31 @@ function copyDay(body) {
   return { copied: listEntries(to).length, entries: listEntries(to) };
 }
 
+const MAX_SUMMARY_DAYS = 31;
+
+function summarize(fromStr, toStr) {
+  const from = parseDate(fromStr, 'from');
+  const to = parseDate(toStr, 'to');
+  // Dates are validated, so UTC stepping gives each calendar day exactly once.
+  const dates = [];
+  const d = new Date(`${from}T00:00:00Z`);
+  const last = new Date(`${to}T00:00:00Z`);
+  if (last < d) throw new HttpError(400, '"to" must not be before "from"', { field: 'to' });
+  while (d <= last) {
+    if (dates.length === MAX_SUMMARY_DAYS) throw new HttpError(400, `Range is limited to ${MAX_SUMMARY_DAYS} days`, { field: 'to' });
+    dates.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  const rows = db
+    .prepare(
+      `SELECT date, category, SUM(end_min - start_min) AS minutes, SUM(done) AS done, COUNT(*) AS count
+       FROM entries WHERE date BETWEEN ? AND ? GROUP BY date, category`,
+    )
+    .all(from, to)
+    .map((r) => ({ ...r, minutes: Number(r.minutes), done: Number(r.done), count: Number(r.count) }));
+  return { from, to, days: buildSummary(dates, rows) };
+}
+
 const readJsonBody = (req) => {
   requireJson(req);
   return readBody(req);
@@ -336,6 +362,9 @@ async function handleApi(req, res, url) {
   }
 
   if (resource === 'generate' && req.method === 'POST') return send(res, 201, generateTimetable(await readJsonBody(req)));
+  if (resource === 'summary' && req.method === 'GET') {
+    return send(res, 200, summarize(url.searchParams.get('from'), url.searchParams.get('to')));
+  }
   if (resource === 'copy' && req.method === 'POST') return send(res, 201, copyDay(await readJsonBody(req)));
   if (resource === 'day' && req.method === 'DELETE') {
     db.prepare('DELETE FROM entries WHERE date = ?').run(parseDate(url.searchParams.get('date')));

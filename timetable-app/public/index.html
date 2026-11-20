@@ -18,6 +18,20 @@
   </header>
 
   <main>
+    <div class="left-col">
+    <section class="panel week-panel" aria-labelledby="week-title">
+      <div class="panel-head">
+        <h2 id="week-title">Week overview</h2>
+        <span id="week-range" class="muted"></span>
+        <span class="week-nav">
+          <button type="button" id="prev-week" class="secondary small">Previous week</button>
+          <button type="button" id="next-week" class="secondary small">Next week</button>
+        </span>
+      </div>
+      <ul id="week-days" class="week-days"></ul>
+      <p class="muted">Counts, minutes and done exclude breaks.</p>
+    </section>
+
     <section class="panel" aria-labelledby="schedule-title">
       <div class="panel-head">
         <h2 id="schedule-title">Schedule</h2>
@@ -34,6 +48,7 @@
       <ul id="schedule" class="schedule"></ul>
       <p id="empty" class="muted">Nothing planned yet. Add an entry or generate a timetable.</p>
     </section>
+    </div>
 
     <aside>
       <section class="panel" aria-labelledby="add-title">
