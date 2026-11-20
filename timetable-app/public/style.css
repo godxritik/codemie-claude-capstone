@@ -5,13 +5,15 @@
   --muted: #6b7785;
   --border: #dde3ea;
   --primary: #2f6fed;
-  --danger: #d64545;
+  --danger: #c53030;
   --work: #2f6fed;
   --study: #8a4fd8;
-  --health: #1fa56b;
-  --personal: #e08a1e;
-  --break: #8e9aa8;
+  --health: #187a4f;
+  --personal: #a85d00;
+  --break: #5f6b78;
   --general: #4a5a6a;
+  --focus: #2f6fed;
+  --field-border: #7b8794; /* 3.66:1 on white (WCAG 1.4.11) */
 }
 
 * { box-sizing: border-box; }
@@ -79,6 +81,8 @@ input, select, button {
   color: var(--text);
 }
 
+input, select { border-color: var(--field-border); }
+
 button {
   cursor: pointer;
   background: var(--primary);
@@ -88,6 +92,9 @@ button {
 button:hover { filter: brightness(0.93); }
 button.secondary { background: #fff; color: var(--primary); }
 button.danger { background: #fff; color: var(--danger); border-color: var(--danger); }
+button:disabled { opacity: 0.6; cursor: not-allowed; filter: none; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.form-error:focus-visible { outline-offset: 0; }
 button.small { padding: 3px 9px; font-size: 13px; }
 .date-nav button { background: #fff; color: var(--text); }
 
@@ -123,7 +130,6 @@ button.small { padding: 3px 9px; font-size: 13px; }
 .entry .cat { font-size: 12px; color: var(--cat, var(--muted)); text-transform: capitalize; }
 .entry .actions { display: flex; gap: 6px; align-items: center; }
 .entry.done .title strong { text-decoration: line-through; color: var(--muted); }
-.entry.done { opacity: 0.7; }
 
 .entry.editing { grid-template-columns: 1fr; }
 .edit-form .edit-actions { display: flex; gap: 6px; }
