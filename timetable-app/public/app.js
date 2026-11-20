@@ -147,6 +147,7 @@ function render(entries = currentEntries) {
   emptyEl.hidden = entries.length > 0;
   const tasks = entries.filter((e) => e.category !== 'break');
   const done = tasks.filter((e) => e.done).length;
+  $('#copy-day').disabled = !entries.length;
   progressEl.textContent = tasks.length ? `${done}/${tasks.length} done` : '';
 
   for (const e of entries) {
@@ -535,6 +536,22 @@ $('#tpl-delete').addEventListener('click', () =>
     tplStatus.textContent = `Template "${t.name}" deleted.`;
   }),
 );
+
+$('#copy-day').addEventListener('click', () => {
+  const to = $('#copy-to').value;
+  const body = { from: dateInput.value, to };
+  runSchedule(async () => {
+    if (!to) throw Object.assign(new ApiError('Choose a date to copy to', 400), { el: $('#copy-to') });
+    let res;
+    try {
+      res = await api('/copy', { method: 'POST', body });
+    } catch (e) {
+      if (e.status !== 409 || !confirm(`${e.message}. Replace them with this day's entries?`)) throw e;
+      res = await api('/copy', { method: 'POST', body: { ...body, replace: true } });
+    }
+    showMessage(`Copied ${res.copied} entries to ${to}.`, 'ok');
+  });
+});
 
 $('#clear-day').addEventListener('click', () => {
   if (!scheduleEl.children.length || !confirm('Delete all entries for this day?')) return;

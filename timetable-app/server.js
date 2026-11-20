@@ -243,6 +243,30 @@ function saveTemplate(body) {
   return templateDto(db.prepare('SELECT * FROM templates WHERE id = ?').get(info.lastInsertRowid));
 }
 
+function copyDay(body) {
+  const from = parseDate(body.from, 'from');
+  const to = parseDate(body.to, 'to');
+  const replace = requireBoolean(body.replace, 'replace') ?? false;
+  if (from === to) throw new HttpError(400, 'Choose a different date to copy to', { field: 'to' });
+  db.exec('BEGIN');
+  try {
+    const source = db.prepare('SELECT * FROM entries WHERE date = ? ORDER BY start_min').all(from);
+    if (!source.length) throw new HttpError(400, 'The day to copy has no entries', { field: 'from' });
+    const { n } = db.prepare('SELECT COUNT(*) AS n FROM entries WHERE date = ?').get(to);
+    if (n && !replace) {
+      throw new HttpError(409, `${to} already has ${n} entr${n === 1 ? 'y' : 'ies'}`, { field: 'to', existing: n });
+    }
+    if (n) db.prepare('DELETE FROM entries WHERE date = ?').run(to);
+    const insert = db.prepare('INSERT INTO entries (date, title, start_min, end_min, category, done) VALUES (?, ?, ?, ?, ?, 0)');
+    for (const r of source) insert.run(to, r.title, r.start_min, r.end_min, r.category);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return { copied: listEntries(to).length, entries: listEntries(to) };
+}
+
 const readJsonBody = (req) => {
   requireJson(req);
   return readBody(req);
@@ -312,6 +336,7 @@ async function handleApi(req, res, url) {
   }
 
   if (resource === 'generate' && req.method === 'POST') return send(res, 201, generateTimetable(await readJsonBody(req)));
+  if (resource === 'copy' && req.method === 'POST') return send(res, 201, copyDay(await readJsonBody(req)));
   if (resource === 'day' && req.method === 'DELETE') {
     db.prepare('DELETE FROM entries WHERE date = ?').run(parseDate(url.searchParams.get('date')));
     return send(res, 204);

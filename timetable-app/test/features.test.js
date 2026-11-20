@@ -77,3 +77,40 @@ test('templates: tasks validated like /generate; empty list rejected', async () 
   assert.equal((await bad(Array.from({ length: 51 }, () => ({ title: 'a', minutes: 30 })))).status, 400);
   assert.equal((await call('/templates')).data.some((t) => t.name === 'Bad'), false);
 });
+
+// ---- TIME-7 copy a day ----
+
+test('copy: copies titles, times, categories and breaks with done reset', async () => {
+  const a = (await add('2031-01-01', 'Work', '09:00', '10:00', 'work')).data;
+  await add('2031-01-01', 'Break', '10:00', '10:10', 'break');
+  await call(`/entries/${a.id}`, 'PATCH', { done: true });
+  const res = await call('/copy', 'POST', { from: '2031-01-01', to: '2031-01-02' });
+  assert.equal(res.status, 201);
+  const copied = (await call('/entries?date=2031-01-02')).data;
+  assert.deepEqual(copied.map((e) => [e.title, e.start, e.end, e.category, e.done]), [
+    ['Work', '09:00', '10:00', 'work', false],
+    ['Break', '10:00', '10:10', 'break', false],
+  ]);
+  assert.equal((await call('/entries?date=2031-01-01')).data[0].done, true);
+});
+
+test('copy: validation errors', async () => {
+  assert.equal((await call('/copy', 'POST', { from: '2031-01-01', to: '2031-01-01' })).status, 400);
+  assert.equal((await call('/copy', 'POST', { from: '2031-02-01', to: '2031-02-02' })).status, 400); // empty source
+  assert.equal((await call('/copy', 'POST', { from: '2031-02-31', to: '2031-02-02' })).status, 400);
+  assert.equal((await call('/copy', 'POST', { from: '2031-01-01', to: 'nope' })).status, 400);
+  assert.equal((await call('/copy', 'POST', { from: '2031-01-01' })).status, 400);
+});
+
+test('copy: non-empty target gives 409 with count and writes nothing; replace swaps atomically', async () => {
+  await add('2031-03-01', 'S', '08:00', '09:00');
+  await add('2031-03-02', 'T1', '12:00', '13:00');
+  await add('2031-03-02', 'T2', '14:00', '15:00');
+  const res = await call('/copy', 'POST', { from: '2031-03-01', to: '2031-03-02' });
+  assert.equal(res.status, 409);
+  assert.equal(res.data.existing, 2);
+  assert.deepEqual((await call('/entries?date=2031-03-02')).data.map((e) => e.title), ['T1', 'T2']);
+  const ok = await call('/copy', 'POST', { from: '2031-03-01', to: '2031-03-02', replace: true });
+  assert.equal(ok.status, 201);
+  assert.deepEqual((await call('/entries?date=2031-03-02')).data.map((e) => e.title), ['S']);
+});

@@ -146,3 +146,6 @@ button.small { padding: 3px 9px; font-size: 13px; }
 .cat-general { --cat: var(--general); }
 
 .tpl-save, .tpl-load { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+
+.copy-day { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.copy-day label { flex: none; }
