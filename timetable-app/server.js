@@ -33,17 +33,28 @@ class HttpError extends Error {
   }
 }
 
-const parseTime = (s) => {
-  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(s));
+// Minutes 0..1439; 1440 (24:00) only when allowEnd24 is set (end times).
+const parseTime = (s, { allowEnd24 = false } = {}) => {
+  const str = String(s);
+  if (str === '24:00') {
+    if (allowEnd24) return 24 * 60;
+    throw new HttpError(400, '24:00 is only allowed as an end time');
+  }
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(str);
   if (!m) throw new HttpError(400, `Invalid time "${s}", expected HH:MM`);
   return Number(m[1]) * 60 + Number(m[2]);
 };
 
+// Accepts only real calendar dates (rejects 2030-02-31, month 13, ...).
 const parseDate = (s) => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s)) || Number.isNaN(Date.parse(s))) {
-    throw new HttpError(400, `Invalid date "${s}", expected YYYY-MM-DD`);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s));
+  if (m) {
+    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const dt = new Date(0);
+    dt.setUTCFullYear(y, mo - 1, d); // not Date.UTC: it maps years 0-99 to 1900-1999
+    if (dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d) return s;
   }
-  return s;
+  throw new HttpError(400, `Invalid date "${s}", expected YYYY-MM-DD`);
 };
 
 const fmt = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
@@ -84,7 +95,7 @@ function createEntry(body) {
   const title = parseTitle(body.title);
   const category = parseCategory(body.category);
   const startMin = parseTime(body.start);
-  const endMin = parseTime(body.end);
+  const endMin = parseTime(body.end, { allowEnd24: true });
   if (endMin <= startMin) throw new HttpError(400, 'End time must be after start time');
   const clash = findOverlap(date, startMin, endMin);
   if (clash) throw new HttpError(409, `Overlaps with "${clash.title}" (${fmt(clash.start_min)}-${fmt(clash.end_min)})`);
@@ -100,7 +111,7 @@ function updateEntry(id, body) {
   const title = body.title !== undefined ? parseTitle(body.title) : row.title;
   const category = body.category !== undefined ? parseCategory(body.category) : row.category;
   const startMin = body.start !== undefined ? parseTime(body.start) : row.start_min;
-  const endMin = body.end !== undefined ? parseTime(body.end) : row.end_min;
+  const endMin = body.end !== undefined ? parseTime(body.end, { allowEnd24: true }) : row.end_min;
   const done = body.done !== undefined ? (body.done ? 1 : 0) : row.done;
   if (endMin <= startMin) throw new HttpError(400, 'End time must be after start time');
   const clash = findOverlap(row.date, startMin, endMin, id);
