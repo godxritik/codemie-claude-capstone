@@ -7,6 +7,8 @@ import { DatabaseSync } from 'node:sqlite';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const PORT = Number(process.env.PORT) || 3000;
+// Loopback by default (no auth); set HOST=0.0.0.0 to expose on the network.
+const HOST = process.env.HOST || '127.0.0.1';
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'timetable.db');
 
 if (DB_FILE !== ':memory:') fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
@@ -307,4 +309,4 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log(`Timetable app running at http://localhost:${PORT}`));
+server.listen(PORT, HOST, () => console.log(`Timetable app running at http://${HOST}:${PORT}`));

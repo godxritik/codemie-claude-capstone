@@ -5,10 +5,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const PORT = 3999;
-const ORIGIN = `http://localhost:${PORT}`;
+const ORIGIN = `http://127.0.0.1:${PORT}`;
 const BASE = `${ORIGIN}/api`;
 const DATE = '2030-01-15';
 let server;
+let startupLine = '';
 
 const call = async (p, method = 'GET', body) => {
   const res = await fetch(BASE + p, {
@@ -37,7 +38,12 @@ before(async () => {
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.stdout.on('data', (d) => String(d).includes('running') && resolve());
+    server.stdout.on('data', (d) => {
+      if (String(d).includes('running')) {
+        startupLine = String(d);
+        resolve();
+      }
+    });
   });
 });
 
@@ -208,4 +214,8 @@ test('malformed URL escapes return 400, not 500', async () => {
   assert.equal((await raw('/%E0%A4%A')).status, 400);
   assert.equal((await raw('/does-not-exist.js')).status, 404);
   assert.equal((await raw('/')).status, 200);
+});
+
+test('server binds to loopback by default', () => {
+  assert.match(startupLine, /http:\/\/127\.0\.0\.1:3999/);
 });
