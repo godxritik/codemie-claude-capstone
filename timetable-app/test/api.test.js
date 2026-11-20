@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const PORT = 3999;
-const BASE = `http://localhost:${PORT}/api`;
+const ORIGIN = `http://localhost:${PORT}`;
+const BASE = `${ORIGIN}/api`;
 const DATE = '2030-01-15';
 let server;
 
@@ -16,6 +17,15 @@ const call = async (p, method = 'GET', body) => {
     body: body ? JSON.stringify(body) : undefined,
   });
   return { status: res.status, data: res.status === 204 ? null : await res.json() };
+};
+
+// Raw request helper: lets a test omit or override headers and send a non-JSON body.
+const raw = async (p, { method = 'GET', headers = {}, body } = {}) => {
+  const res = await fetch(ORIGIN + p, { method, headers, body });
+  const text = await res.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch { data = text; }
+  return { status: res.status, data };
 };
 
 before(async () => {
@@ -97,4 +107,105 @@ test('generate refuses plans that overflow the day or clash without replace', as
   });
   assert.equal(clash.status, 409);
   assert.equal((await call('/entries?date=2030-01-19')).data.length, 1);
+});
+
+test('rejects dates that do not exist in the calendar on every endpoint', async () => {
+  for (const bad of ['2030-02-31', '2031-02-29', '2030-13-01', '2030-00-10', '2030-01-00', '2030-1-5']) {
+    assert.equal((await call(`/entries?date=${bad}`)).status, 400, `GET ${bad}`);
+    assert.equal((await call('/entries', 'POST', { date: bad, title: 'X', start: '07:00', end: '08:00' })).status, 400, `POST ${bad}`);
+    assert.equal((await call(`/day?date=${bad}`, 'DELETE')).status, 400, `DELETE day ${bad}`);
+    assert.equal((await call('/generate', 'POST', { date: bad, tasks: [{ title: 'T', minutes: 30 }] })).status, 400, `generate ${bad}`);
+  }
+  assert.equal((await call('/entries')).status, 400);
+  assert.equal((await call('/entries?date=2032-02-29')).status, 200);
+  assert.equal((await call('/entries?date=0099-12-31')).status, 200);
+  assert.match((await call('/entries?date=2030-02-31')).data.error, /2030-02-31/);
+});
+
+test('accepts 24:00 as an end time only', async () => {
+  const day = '2030-02-01';
+  const full = await call('/entries', 'POST', { date: day, title: 'Late', start: '23:00', end: '24:00' });
+  assert.equal(full.status, 201);
+  assert.equal(full.data.end, '24:00');
+
+  // editing other fields of a 24:00 entry works, also when the client re-sends end 24:00
+  const renamed = await call(`/entries/${full.data.id}`, 'PATCH', { title: 'Late night', category: 'personal', done: true });
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.data.end, '24:00');
+  assert.equal((await call(`/entries/${full.data.id}`, 'PATCH', { end: '24:00' })).status, 200);
+
+  // 24:00 is never a start
+  assert.equal((await call('/entries', 'POST', { date: day, title: 'X', start: '24:00', end: '24:00' })).status, 400);
+  assert.equal((await call(`/entries/${full.data.id}`, 'PATCH', { start: '24:00' })).status, 400);
+  assert.equal((await call('/generate', 'POST', { date: '2030-02-02', start: '24:00', tasks: [{ title: 'T', minutes: 30 }] })).status, 400);
+  assert.equal((await call('/entries', 'POST', { date: day, title: 'X', start: '07:00', end: '24:01' })).status, 400);
+
+  // a generated entry that ends exactly at midnight is stored and can be edited
+  const gen = await call('/generate', 'POST', { date: '2030-02-03', start: '23:00', replace: true, tasks: [{ title: 'Last hour', minutes: 60 }] });
+  assert.equal(gen.status, 201);
+  const [g] = (await call('/entries?date=2030-02-03')).data;
+  assert.equal(g.end, '24:00');
+  assert.equal((await call(`/entries/${g.id}`, 'PATCH', { title: 'Renamed', end: '24:00' })).status, 200);
+});
+
+test('generate rejects non-object tasks and non-boolean replace with 400', async () => {
+  for (const bad of [null, 5, 'x', [1]]) {
+    const res = await call('/generate', 'POST', { date: DATE, tasks: [{ title: 'OK', minutes: 30 }, bad] });
+    assert.equal(res.status, 400, JSON.stringify(bad));
+    assert.match(res.data.error, /^Task 2: must be an object/);
+  }
+  assert.equal((await call('/generate', 'POST', { date: DATE, tasks: [null] })).status, 400);
+  for (const bad of ['false', 'true', 1, 0, null]) {
+    const res = await call('/generate', 'POST', { date: '2030-02-04', replace: bad, tasks: [{ title: 'T', minutes: 30 }] });
+    assert.equal(res.status, 400, `replace ${JSON.stringify(bad)}`);
+    assert.match(res.data.error, /replace must be true or false/);
+  }
+  assert.equal((await call('/entries?date=2030-02-04')).data.length, 0);
+  const noTitle = await call('/generate', 'POST', { date: DATE, tasks: [{ title: 'OK', minutes: 30 }, { title: '  ', minutes: 30 }] });
+  assert.equal(noTitle.status, 400);
+  assert.match(noTitle.data.error, /^Task 2: Title is required/);
+});
+
+test('PATCH validates done, 404 and overlap', async () => {
+  const day = '2030-02-05';
+  const a = await call('/entries', 'POST', { date: day, title: 'A', start: '09:00', end: '10:00' });
+  const b = await call('/entries', 'POST', { date: day, title: 'B', start: '11:00', end: '12:00' });
+  for (const bad of ['false', 'true', 1, 0, null]) {
+    assert.equal((await call(`/entries/${a.data.id}`, 'PATCH', { done: bad })).status, 400, `done ${JSON.stringify(bad)}`);
+  }
+  assert.equal((await call(`/entries/${a.data.id}`, 'PATCH', { done: false })).data.done, false);
+  assert.equal((await call('/entries/999999', 'PATCH', { title: 'X' })).status, 404);
+  assert.equal((await call('/entries/abc', 'PATCH', { title: 'X' })).status, 400);
+  const clash = await call(`/entries/${b.data.id}`, 'PATCH', { start: '09:30' });
+  assert.equal(clash.status, 409);
+  assert.match(clash.data.error, /Overlaps with "A"/);
+  assert.equal((await call(`/entries/${b.data.id}`, 'PATCH', { start: '10:00' })).status, 200);
+  assert.equal((await call(`/entries/${b.data.id}`, 'PATCH', { title: '' })).status, 400);
+});
+
+test('DELETE /api/day removes only that day', async () => {
+  await call('/entries', 'POST', { date: '2030-02-06', title: 'A', start: '09:00', end: '10:00' });
+  await call('/entries', 'POST', { date: '2030-02-07', title: 'B', start: '09:00', end: '10:00' });
+  assert.equal((await call('/day?date=2030-02-06', 'DELETE')).status, 204);
+  assert.equal((await call('/entries?date=2030-02-06')).data.length, 0);
+  assert.equal((await call('/entries?date=2030-02-07')).data.length, 1);
+  assert.equal((await call('/day', 'DELETE')).status, 400);
+});
+
+test('POST and PATCH require Content-Type application/json', async () => {
+  const body = JSON.stringify({ date: DATE, title: 'CT', start: '05:00', end: '05:30' });
+  assert.equal((await raw('/api/entries', { method: 'POST', body })).status, 415);
+  assert.equal((await raw('/api/entries', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body })).status, 415);
+  assert.equal((await raw('/api/generate', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '{}' })).status, 415);
+  assert.equal((await raw('/api/entries/1', { method: 'PATCH', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: '{}' })).status, 415);
+  const ok = await raw('/api/entries', { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body });
+  assert.equal(ok.status, 201);
+  // unknown routes still 404 regardless of Content-Type
+  assert.equal((await raw('/api/nope', { method: 'POST', body: '{}' })).status, 404);
+});
+
+test('malformed URL escapes return 400, not 500', async () => {
+  assert.equal((await raw('/%E0%A4%A')).status, 400);
+  assert.equal((await raw('/does-not-exist.js')).status, 404);
+  assert.equal((await raw('/')).status, 200);
 });
