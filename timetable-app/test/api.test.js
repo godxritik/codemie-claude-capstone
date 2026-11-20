@@ -115,6 +115,77 @@ test('generate refuses plans that overflow the day or clash without replace', as
   assert.equal((await call('/entries?date=2030-01-19')).data.length, 1);
 });
 
+const brief = (entries) => entries.map((e) => [e.title, e.start, e.end]);
+
+test('generate saves tasks that fit and lists the skipped ones in priority order', async () => {
+  const res = await call('/generate', 'POST', {
+    date: '2030-03-01', start: '21:00', breakMinutes: 15, replace: true,
+    tasks: [
+      { title: 'Huge', minutes: 300, priority: 2 },
+      { title: 'Short', minutes: 30, priority: 1 },
+      { title: 'Huge low', minutes: 240, priority: 3 },
+    ],
+  });
+  assert.equal(res.status, 201);
+  assert.deepEqual(brief(res.data.entries), [['Short', '21:00', '21:30']]);
+  assert.deepEqual(res.data.unscheduled, [
+    { title: 'Huge', minutes: 300, reason: 'does not fit before midnight' },
+    { title: 'Huge low', minutes: 240, reason: 'does not fit before midnight' },
+  ]);
+  assert.equal((await call('/entries?date=2030-03-01')).data.length, 1);
+});
+
+test('generate reports an empty unscheduled list when everything fits', async () => {
+  const res = await call('/generate', 'POST', {
+    date: '2030-03-02', start: '09:00', breakMinutes: 10, replace: true, tasks: [{ title: 'A', minutes: 30 }],
+  });
+  assert.equal(res.status, 201);
+  assert.deepEqual(res.data.unscheduled, []);
+});
+
+test('a task ending exactly at 24:00 counts as fitting', async () => {
+  const res = await call('/generate', 'POST', {
+    date: '2030-03-03', start: '23:00', replace: true, tasks: [{ title: 'Edge', minutes: 60 }],
+  });
+  assert.equal(res.status, 201);
+  assert.deepEqual(brief(res.data.entries), [['Edge', '23:00', '24:00']]);
+  assert.deepEqual(res.data.unscheduled, []);
+});
+
+test('generate with nothing that fits returns 400 and keeps existing entries even with replace', async () => {
+  await call('/entries', 'POST', { date: '2030-03-04', title: 'Keep me', start: '08:00', end: '09:00' });
+  const res = await call('/generate', 'POST', {
+    date: '2030-03-04', start: '22:00', replace: true, tasks: [{ title: 'Long', minutes: 180 }, { title: 'Longer', minutes: 240 }],
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.data.error, /No task fits/);
+  assert.deepEqual(res.data.unscheduled.map((u) => u.title), ['Long', 'Longer']);
+  assert.deepEqual(brief((await call('/entries?date=2030-03-04')).data), [['Keep me', '08:00', '09:00']]);
+});
+
+test('a skipped task never leaves a trailing break', async () => {
+  // A 22:00-23:00, B (180) skipped, C placed after a break between the placed tasks
+  const res = await call('/generate', 'POST', {
+    date: '2030-03-05', start: '22:00', breakMinutes: 15, replace: true,
+    tasks: [
+      { title: 'A', minutes: 60, priority: 1 },
+      { title: 'B', minutes: 180, priority: 2 },
+      { title: 'C', minutes: 30, priority: 3 },
+    ],
+  });
+  assert.deepEqual(brief(res.data.entries), [
+    ['A', '22:00', '23:00'], ['Break', '23:00', '23:15'], ['C', '23:15', '23:45'],
+  ]);
+  assert.deepEqual(res.data.unscheduled.map((u) => u.title), ['B']);
+
+  // last placed task is followed by nothing when the next one is skipped
+  const tail = await call('/generate', 'POST', {
+    date: '2030-03-06', start: '23:00', breakMinutes: 15, replace: true,
+    tasks: [{ title: 'A', minutes: 30, priority: 1 }, { title: 'B', minutes: 60, priority: 2 }],
+  });
+  assert.deepEqual(brief(tail.data.entries), [['A', '23:00', '23:30']]);
+});
+
 test('rejects dates that do not exist in the calendar on every endpoint', async () => {
   for (const bad of ['2030-02-31', '2031-02-29', '2030-13-01', '2030-00-10', '2030-01-00', '2030-1-5']) {
     assert.equal((await call(`/entries?date=${bad}`)).status, 400, `GET ${bad}`);

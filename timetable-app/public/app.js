@@ -13,9 +13,11 @@ const toISODate = (d) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 
-function showMessage(text, ok = false) {
+// kind: 'ok' | 'warn' | '' (error styling). Empty text hides the message.
+function showMessage(text, kind = '') {
   messageEl.textContent = text;
-  messageEl.classList.toggle('ok', ok);
+  messageEl.classList.toggle('ok', kind === 'ok');
+  messageEl.classList.toggle('warn', kind === 'warn');
   messageEl.hidden = !text;
 }
 
@@ -27,7 +29,11 @@ async function api(path, options = {}) {
   });
   if (res.status === 204) return null;
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
+  if (!res.ok) {
+    const err = new Error(data.error || 'Request failed');
+    err.body = data;
+    throw err;
+  }
   return data;
 }
 
@@ -164,14 +170,23 @@ $('#gen-form').addEventListener('submit', async (ev) => {
     priority: Number(row.querySelector('[name=priority]').value),
     category: row.querySelector('[name=category]').value,
   }));
-  const ok = await run(async () => {
+  const describe = (u) => `"${u.title}" (${u.minutes} min, ${u.reason})`;
+  try {
     const res = await api('/generate', {
       method: 'POST',
       body: { date: dateInput.value, start: f.get('start'), breakMinutes: Number(f.get('breakMinutes')), tasks, replace },
     });
     render(res.entries);
-  });
-  if (ok) showMessage('Timetable generated.', true);
+    // Task rows are kept on purpose so skipped tasks can be adjusted.
+    if (res.unscheduled.length) {
+      showMessage(`Timetable generated. ${res.unscheduled.length} task(s) not scheduled: ${res.unscheduled.map(describe).join('; ')}`, 'warn');
+    } else {
+      showMessage('Timetable generated.', 'ok');
+    }
+  } catch (e) {
+    const skipped = e.body?.unscheduled ?? [];
+    showMessage(skipped.length ? `${e.message}: ${skipped.map(describe).join('; ')}` : e.message);
+  }
 });
 
 $('#clear-day').addEventListener('click', () => {
