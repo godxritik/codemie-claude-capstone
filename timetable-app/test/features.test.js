@@ -146,3 +146,30 @@ test('summary: validation and 31-day limit', async () => {
   assert.equal((await call('/summary?from=2032-03-01')).status, 400);
   assert.equal((await call('/summary')).status, 400);
 });
+
+// ---- TIME-9 time by category ----
+
+test('summary: categories include breaks, share is of all planned time (done or not)', async () => {
+  const a = (await add('2033-05-02', 'A', '09:00', '10:00', 'work')).data;
+  await add('2033-05-02', 'B', '10:00', '10:30', 'study');
+  await add('2033-05-02', 'Break', '10:30', '11:00', 'break');
+  await call(`/entries/${a.id}`, 'PATCH', { done: true });
+  const day = (await call('/summary?from=2033-05-02&to=2033-05-02')).data.days[0];
+  assert.equal(day.totalMinutes, 120);
+  assert.equal(day.totalDuration, '2h');
+  assert.deepEqual(day.categories.map((c) => [c.category, c.minutes, c.duration, c.share]), [
+    ['work', 60, '1h', '50%'],
+    ['break', 30, '30m', '25%'],
+    ['study', 30, '30m', '25%'],
+  ]);
+});
+
+test('summary: empty day has no categories; edits and deletes are reflected', async () => {
+  const empty = (await call('/summary?from=2033-06-01&to=2033-06-01')).data.days[0];
+  assert.deepEqual(empty.categories, []);
+  const e = (await add('2033-06-01', 'X', '09:00', '09:30', 'work')).data;
+  await call(`/entries/${e.id}`, 'PATCH', { end: '10:00' });
+  assert.equal((await call('/summary?from=2033-06-01&to=2033-06-01')).data.days[0].categories[0].minutes, 60);
+  await call(`/entries/${e.id}`, 'DELETE');
+  assert.deepEqual((await call('/summary?from=2033-06-01&to=2033-06-01')).data.days[0].categories, []);
+});

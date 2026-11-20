@@ -45,6 +45,14 @@
         <input type="date" id="copy-to">
         <button type="button" id="copy-day" class="secondary small">Copy</button>
       </div>
+      <section id="cat-summary" aria-labelledby="cat-title" hidden>
+        <h3 id="cat-title">Time by category</h3>
+        <table class="cat-table">
+          <thead><tr><th scope="col">Category</th><th scope="col">Time</th><th scope="col">Share</th></tr></thead>
+          <tbody id="cat-rows"></tbody>
+          <tfoot><tr><th scope="row">Total planned</th><td id="cat-total"></td><td></td></tr></tfoot>
+        </table>
+      </section>
       <ul id="schedule" class="schedule"></ul>
       <p id="empty" class="muted">Nothing planned yet. Add an entry or generate a timetable.</p>
     </section>

@@ -214,7 +214,29 @@ async function load() {
   const entries = await api(`/entries?date=${dateInput.value}`);
   if (editingId !== null && !entries.some((e) => e.id === editingId)) editingId = null;
   render(entries);
-  await refreshWeek();
+  await Promise.all([refreshWeek(), refreshCategories()]);
+}
+
+// --- Time by category (server-computed; includes breaks, share of all planned time) ---
+async function refreshCategories() {
+  const date = dateInput.value;
+  const { days } = await api(`/summary?from=${date}&to=${date}`);
+  if (date !== dateInput.value) return; // a newer navigation superseded this response
+  const day = days[0];
+  const section = $('#cat-summary');
+  section.hidden = !day.categories.length;
+  const rows = $('#cat-rows');
+  rows.replaceChildren();
+  for (const c of day.categories) {
+    const tr = document.createElement('tr');
+    for (const text of [c.category, c.duration, c.share]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.append(td);
+    }
+    rows.append(tr);
+  }
+  $('#cat-total').textContent = day.totalDuration;
 }
 
 // --- Week overview ---
@@ -507,6 +529,7 @@ $('#gen-form').addEventListener('submit', async (ev) => {
     });
     editingId = null;
     render(res.entries);
+    await Promise.all([refreshWeek(), refreshCategories()]);
     // Task rows are kept on purpose so skipped tasks can be adjusted.
     if (res.unscheduled.length) {
       showMessage(`Timetable generated. ${res.unscheduled.length} task(s) not scheduled: ${res.unscheduled.map(describe).join('; ')}`, 'warn');

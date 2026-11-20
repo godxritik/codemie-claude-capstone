@@ -31,6 +31,7 @@ export function buildSummary(dates, rows) {
       minutes: tasks.reduce((a, r) => a + r.minutes, 0),
       done: tasks.reduce((a, r) => a + r.done, 0),
       totalMinutes: total,
+      totalDuration: formatDuration(total),
       categories: mine
         .map((r) => ({ category: r.category, minutes: r.minutes, duration: formatDuration(r.minutes), share: shareLabel(r.minutes, total) }))
         .sort((a, b) => b.minutes - a.minutes || a.category.localeCompare(b.category)),
