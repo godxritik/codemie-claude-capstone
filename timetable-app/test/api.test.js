@@ -20,6 +20,8 @@ const call = async (p, method = 'GET', body) => {
   return { status: res.status, data: res.status === 204 ? null : await res.json() };
 };
 
+const brief = (entries) => entries.map((e) => [e.title, e.start, e.end]);
+
 // Raw request helper: lets a test omit or override headers and send a non-JSON body.
 const raw = async (p, { method = 'GET', headers = {}, body } = {}) => {
   const res = await fetch(ORIGIN + p, { method, headers, body });
@@ -111,11 +113,9 @@ test('generate refuses plans that overflow the day or clash without replace', as
   const clash = await call('/generate', 'POST', {
     date: '2030-01-19', start: '09:30', replace: false, tasks: [{ title: 'T', minutes: 30 }],
   });
-  assert.equal(clash.status, 409);
-  assert.equal((await call('/entries?date=2030-01-19')).data.length, 1);
+  assert.equal(clash.status, 201);
+  assert.deepEqual(brief(clash.data.entries), [['Busy', '09:00', '10:00'], ['T', '10:00', '10:30']]);
 });
-
-const brief = (entries) => entries.map((e) => [e.title, e.start, e.end]);
 
 test('generate saves tasks that fit and lists the skipped ones in priority order', async () => {
   const res = await call('/generate', 'POST', {

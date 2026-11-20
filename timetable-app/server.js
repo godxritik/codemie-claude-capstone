@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { planTasks } from './scheduler.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -140,7 +141,7 @@ function updateEntry(id, body) {
   return toDto(db.prepare('SELECT * FROM entries WHERE id = ?').get(id));
 }
 
-// Lays tasks out back to back from `start`, highest priority first, with breaks in between.
+// Places tasks from `start`, highest priority first, in free time (see scheduler.js); skipped tasks are reported.
 function generateTimetable(body) {
   const date = parseDate(body.date);
   const startMin = parseTime(body.start ?? '09:00');
@@ -177,38 +178,26 @@ function generateTimetable(body) {
       order: i,
     };
   });
-  tasks.sort((a, b) => a.priority - b.priority || a.order - b.order);
-
-  // Tasks that do not fit are skipped (and reported); later, smaller tasks are still tried.
-  const plan = [];
-  const unscheduled = [];
-  let cursor = startMin;
-  let placedAny = false;
-  for (const t of tasks) {
-    let start = cursor;
-    const withBreak = placedAny && breakMin > 0 && start + breakMin + t.minutes <= 24 * 60;
-    if (withBreak) start += breakMin;
-    if (start + t.minutes > 24 * 60) {
-      unscheduled.push({ title: t.title, minutes: t.minutes, reason: 'does not fit before midnight' });
-      continue;
-    }
-    if (withBreak) plan.push({ title: 'Break', category: 'break', start: cursor, end: start });
-    plan.push({ title: t.title, category: t.category, start, end: start + t.minutes });
-    cursor = start + t.minutes;
-    placedAny = true;
-  }
-  if (!plan.length) {
-    throw new HttpError(400, 'No task fits before midnight; shorten tasks or start earlier', { unscheduled });
-  }
-
+  const reason = replace ? 'does not fit before midnight' : `no free gap long enough at or after ${fmt(startMin)}`;
   const insert = db.prepare('INSERT INTO entries (date, title, start_min, end_min, category) VALUES (?, ?, ?, ?, ?)');
+  let unscheduled;
   db.exec('BEGIN');
   try {
-    if (replace) db.prepare('DELETE FROM entries WHERE date = ?').run(date);
-    else {
-      const clash = plan.map((p) => findOverlap(date, p.start, p.end)).find(Boolean);
-      if (clash) throw new HttpError(409, `Generated plan overlaps with "${clash.title}"; choose another start time or replace the day`);
+    // Replace on: the whole day is free. Off: fit around the entries already saved.
+    const busy = replace
+      ? []
+      : db.prepare('SELECT start_min AS start, end_min AS end FROM entries WHERE date = ? ORDER BY start_min').all(date);
+    const { plan, skipped } = planTasks({ tasks, busy, startMin, breakMin });
+    unscheduled = skipped.map((t) => ({ title: t.title, minutes: t.minutes, reason }));
+    if (!plan.length) {
+      // Decided before any DELETE, so a day being replaced is left untouched.
+      throw new HttpError(
+        400,
+        replace ? 'No task fits before midnight; shorten tasks or start earlier' : `No task fits in the free time at or after ${fmt(startMin)}`,
+        { unscheduled },
+      );
     }
+    if (replace) db.prepare('DELETE FROM entries WHERE date = ?').run(date);
     for (const p of plan) insert.run(date, p.title, p.start, p.end, p.category);
     db.exec('COMMIT');
   } catch (e) {
