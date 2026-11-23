@@ -4,7 +4,7 @@ Goal (see `project-objective.md`): run an agentic SDLC pipeline over `timetable-
 
 ## Layout
 
-- `.claude/agents/` - one dedicated agent per SDLC phase (requirements-analyst, planner, designer, developer, code-reviewer, tester, documenter)
+- `.claude/agents/` - one dedicated agent per SDLC phase (requirements-analyst, planner, designer, developer, code-reviewer, tester, documenter), plus `pr-agent` (cross-cutting: branches, commits, sync, push and PRs; not a gated phase, pushes only when the user asks)
 - `.claude/skills/sdlc/` - the orchestrator; run it with `/sdlc`
 - `.claude/settings.json` - registers the hooks
 - `hooks/` - `check-gate.js` (blocks a phase until the previous one is human-approved), `approve.js` (records state), `log-subagent.js` (activity log)
