@@ -5,9 +5,11 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const PORT = 3999;
-const BASE = `http://localhost:${PORT}/api`;
+const ORIGIN = `http://127.0.0.1:${PORT}`;
+const BASE = `${ORIGIN}/api`;
 const DATE = '2030-01-15';
 let server;
+let startupLine = '';
 
 const call = async (p, method = 'GET', body) => {
   const res = await fetch(BASE + p, {
@@ -16,6 +18,17 @@ const call = async (p, method = 'GET', body) => {
     body: body ? JSON.stringify(body) : undefined,
   });
   return { status: res.status, data: res.status === 204 ? null : await res.json() };
+};
+
+const brief = (entries) => entries.map((e) => [e.title, e.start, e.end]);
+
+// Raw request helper: lets a test omit or override headers and send a non-JSON body.
+const raw = async (p, { method = 'GET', headers = {}, body } = {}) => {
+  const res = await fetch(ORIGIN + p, { method, headers, body });
+  const text = await res.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch { data = text; }
+  return { status: res.status, data };
 };
 
 before(async () => {
@@ -27,7 +40,12 @@ before(async () => {
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.stdout.on('data', (d) => String(d).includes('running') && resolve());
+    server.stdout.on('data', (d) => {
+      if (String(d).includes('running')) {
+        startupLine = String(d);
+        resolve();
+      }
+    });
   });
 });
 
@@ -74,7 +92,7 @@ test('generates a timetable ordered by priority with breaks', async () => {
   });
   assert.equal(res.status, 201);
   assert.deepEqual(
-    res.data.map((e) => [e.title, e.start, e.end]),
+    res.data.entries.map((e) => [e.title, e.start, e.end]),
     [
       ['Report', '09:00', '10:30'],
       ['Break', '10:30', '10:45'],
@@ -85,7 +103,7 @@ test('generates a timetable ordered by priority with breaks', async () => {
   );
 });
 
-test('generate refuses plans that overflow the day or clash without replace', async () => {
+test('generate refuses plans that overflow the day and places tasks after existing entries without replace', async () => {
   const overflow = await call('/generate', 'POST', {
     date: '2030-01-18', start: '22:00', replace: true, tasks: [{ title: 'Long', minutes: 180 }],
   });
@@ -95,6 +113,279 @@ test('generate refuses plans that overflow the day or clash without replace', as
   const clash = await call('/generate', 'POST', {
     date: '2030-01-19', start: '09:30', replace: false, tasks: [{ title: 'T', minutes: 30 }],
   });
+  assert.equal(clash.status, 201);
+  assert.deepEqual(brief(clash.data.entries), [['Busy', '09:00', '10:00'], ['T', '10:00', '10:30']]);
+});
+
+test('generate saves tasks that fit and lists the skipped ones in priority order', async () => {
+  const res = await call('/generate', 'POST', {
+    date: '2030-03-01', start: '21:00', breakMinutes: 15, replace: true,
+    tasks: [
+      { title: 'Huge', minutes: 300, priority: 2 },
+      { title: 'Short', minutes: 30, priority: 1 },
+      { title: 'Huge low', minutes: 240, priority: 3 },
+    ],
+  });
+  assert.equal(res.status, 201);
+  assert.deepEqual(brief(res.data.entries), [['Short', '21:00', '21:30']]);
+  assert.deepEqual(res.data.unscheduled, [
+    { title: 'Huge', minutes: 300, reason: 'does not fit before midnight' },
+    { title: 'Huge low', minutes: 240, reason: 'does not fit before midnight' },
+  ]);
+  assert.equal((await call('/entries?date=2030-03-01')).data.length, 1);
+});
+
+test('generate reports an empty unscheduled list when everything fits', async () => {
+  const res = await call('/generate', 'POST', {
+    date: '2030-03-02', start: '09:00', breakMinutes: 10, replace: true, tasks: [{ title: 'A', minutes: 30 }],
+  });
+  assert.equal(res.status, 201);
+  assert.deepEqual(res.data.unscheduled, []);
+});
+
+test('a task ending exactly at 24:00 counts as fitting', async () => {
+  const res = await call('/generate', 'POST', {
+    date: '2030-03-03', start: '23:00', replace: true, tasks: [{ title: 'Edge', minutes: 60 }],
+  });
+  assert.equal(res.status, 201);
+  assert.deepEqual(brief(res.data.entries), [['Edge', '23:00', '24:00']]);
+  assert.deepEqual(res.data.unscheduled, []);
+});
+
+test('generate with nothing that fits returns 400 and keeps existing entries even with replace', async () => {
+  await call('/entries', 'POST', { date: '2030-03-04', title: 'Keep me', start: '08:00', end: '09:00' });
+  const res = await call('/generate', 'POST', {
+    date: '2030-03-04', start: '22:00', replace: true, tasks: [{ title: 'Long', minutes: 180 }, { title: 'Longer', minutes: 240 }],
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.data.error, /No task fits/);
+  assert.deepEqual(res.data.unscheduled.map((u) => u.title), ['Long', 'Longer']);
+  assert.deepEqual(brief((await call('/entries?date=2030-03-04')).data), [['Keep me', '08:00', '09:00']]);
+});
+
+test('a skipped task never leaves a trailing break', async () => {
+  // A 22:00-23:00, B (180) skipped, C placed after a break between the placed tasks
+  const res = await call('/generate', 'POST', {
+    date: '2030-03-05', start: '22:00', breakMinutes: 15, replace: true,
+    tasks: [
+      { title: 'A', minutes: 60, priority: 1 },
+      { title: 'B', minutes: 180, priority: 2 },
+      { title: 'C', minutes: 30, priority: 3 },
+    ],
+  });
+  assert.deepEqual(brief(res.data.entries), [
+    ['A', '22:00', '23:00'], ['Break', '23:00', '23:15'], ['C', '23:15', '23:45'],
+  ]);
+  assert.deepEqual(res.data.unscheduled.map((u) => u.title), ['B']);
+
+  // last placed task is followed by nothing when the next one is skipped
+  const tail = await call('/generate', 'POST', {
+    date: '2030-03-06', start: '23:00', breakMinutes: 15, replace: true,
+    tasks: [{ title: 'A', minutes: 30, priority: 1 }, { title: 'B', minutes: 60, priority: 2 }],
+  });
+  assert.deepEqual(brief(tail.data.entries), [['A', '23:00', '23:30']]);
+});
+
+test('rejects dates that do not exist in the calendar on every endpoint', async () => {
+  for (const bad of ['2030-02-31', '2031-02-29', '2030-13-01', '2030-00-10', '2030-01-00', '2030-1-5']) {
+    assert.equal((await call(`/entries?date=${bad}`)).status, 400, `GET ${bad}`);
+    assert.equal((await call('/entries', 'POST', { date: bad, title: 'X', start: '07:00', end: '08:00' })).status, 400, `POST ${bad}`);
+    assert.equal((await call(`/day?date=${bad}`, 'DELETE')).status, 400, `DELETE day ${bad}`);
+    assert.equal((await call('/generate', 'POST', { date: bad, tasks: [{ title: 'T', minutes: 30 }] })).status, 400, `generate ${bad}`);
+  }
+  assert.equal((await call('/entries')).status, 400);
+  assert.equal((await call('/entries?date=2032-02-29')).status, 200);
+  assert.equal((await call('/entries?date=0099-12-31')).status, 200);
+  assert.match((await call('/entries?date=2030-02-31')).data.error, /2030-02-31/);
+});
+
+test('accepts 24:00 as an end time only', async () => {
+  const day = '2030-02-01';
+  const full = await call('/entries', 'POST', { date: day, title: 'Late', start: '23:00', end: '24:00' });
+  assert.equal(full.status, 201);
+  assert.equal(full.data.end, '24:00');
+
+  // editing other fields of a 24:00 entry works, also when the client re-sends end 24:00
+  const renamed = await call(`/entries/${full.data.id}`, 'PATCH', { title: 'Late night', category: 'personal', done: true });
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.data.end, '24:00');
+  assert.equal((await call(`/entries/${full.data.id}`, 'PATCH', { end: '24:00' })).status, 200);
+
+  // 24:00 is never a start
+  assert.equal((await call('/entries', 'POST', { date: day, title: 'X', start: '24:00', end: '24:00' })).status, 400);
+  assert.equal((await call(`/entries/${full.data.id}`, 'PATCH', { start: '24:00' })).status, 400);
+  assert.equal((await call('/generate', 'POST', { date: '2030-02-02', start: '24:00', tasks: [{ title: 'T', minutes: 30 }] })).status, 400);
+  assert.equal((await call('/entries', 'POST', { date: day, title: 'X', start: '07:00', end: '24:01' })).status, 400);
+
+  // a generated entry that ends exactly at midnight is stored and can be edited
+  const gen = await call('/generate', 'POST', { date: '2030-02-03', start: '23:00', replace: true, tasks: [{ title: 'Last hour', minutes: 60 }] });
+  assert.equal(gen.status, 201);
+  const [g] = (await call('/entries?date=2030-02-03')).data;
+  assert.equal(g.end, '24:00');
+  assert.equal((await call(`/entries/${g.id}`, 'PATCH', { title: 'Renamed', end: '24:00' })).status, 200);
+});
+
+test('generate rejects non-object tasks and non-boolean replace with 400', async () => {
+  for (const bad of [null, 5, 'x', [1]]) {
+    const res = await call('/generate', 'POST', { date: DATE, tasks: [{ title: 'OK', minutes: 30 }, bad] });
+    assert.equal(res.status, 400, JSON.stringify(bad));
+    assert.match(res.data.error, /^Task 2: must be an object/);
+  }
+  assert.equal((await call('/generate', 'POST', { date: DATE, tasks: [null] })).status, 400);
+  for (const bad of ['false', 'true', 1, 0, null]) {
+    const res = await call('/generate', 'POST', { date: '2030-02-04', replace: bad, tasks: [{ title: 'T', minutes: 30 }] });
+    assert.equal(res.status, 400, `replace ${JSON.stringify(bad)}`);
+    assert.match(res.data.error, /replace must be true or false/);
+  }
+  assert.equal((await call('/entries?date=2030-02-04')).data.length, 0);
+  const noTitle = await call('/generate', 'POST', { date: DATE, tasks: [{ title: 'OK', minutes: 30 }, { title: '  ', minutes: 30 }] });
+  assert.equal(noTitle.status, 400);
+  assert.match(noTitle.data.error, /^Task 2: Title is required/);
+});
+
+test('PATCH validates done, 404 and overlap', async () => {
+  const day = '2030-02-05';
+  const a = await call('/entries', 'POST', { date: day, title: 'A', start: '09:00', end: '10:00' });
+  const b = await call('/entries', 'POST', { date: day, title: 'B', start: '11:00', end: '12:00' });
+  for (const bad of ['false', 'true', 1, 0, null]) {
+    assert.equal((await call(`/entries/${a.data.id}`, 'PATCH', { done: bad })).status, 400, `done ${JSON.stringify(bad)}`);
+  }
+  assert.equal((await call(`/entries/${a.data.id}`, 'PATCH', { done: false })).data.done, false);
+  assert.equal((await call('/entries/999999', 'PATCH', { title: 'X' })).status, 404);
+  assert.equal((await call('/entries/abc', 'PATCH', { title: 'X' })).status, 400);
+  const clash = await call(`/entries/${b.data.id}`, 'PATCH', { start: '09:30' });
   assert.equal(clash.status, 409);
-  assert.equal((await call('/entries?date=2030-01-19')).data.length, 1);
+  assert.match(clash.data.error, /Overlaps with "A"/);
+  assert.equal((await call(`/entries/${b.data.id}`, 'PATCH', { start: '10:00' })).status, 200);
+  assert.equal((await call(`/entries/${b.data.id}`, 'PATCH', { title: '' })).status, 400);
+});
+
+test('DELETE /api/day removes only that day', async () => {
+  await call('/entries', 'POST', { date: '2030-02-06', title: 'A', start: '09:00', end: '10:00' });
+  await call('/entries', 'POST', { date: '2030-02-07', title: 'B', start: '09:00', end: '10:00' });
+  assert.equal((await call('/day?date=2030-02-06', 'DELETE')).status, 204);
+  assert.equal((await call('/entries?date=2030-02-06')).data.length, 0);
+  assert.equal((await call('/entries?date=2030-02-07')).data.length, 1);
+  assert.equal((await call('/day', 'DELETE')).status, 400);
+});
+
+test('POST and PATCH require Content-Type application/json', async () => {
+  const body = JSON.stringify({ date: DATE, title: 'CT', start: '05:00', end: '05:30' });
+  assert.equal((await raw('/api/entries', { method: 'POST', body })).status, 415);
+  assert.equal((await raw('/api/entries', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body })).status, 415);
+  assert.equal((await raw('/api/generate', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '{}' })).status, 415);
+  assert.equal((await raw('/api/entries/1', { method: 'PATCH', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: '{}' })).status, 415);
+  const ok = await raw('/api/entries', { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body });
+  assert.equal(ok.status, 201);
+  // unknown routes still 404 regardless of Content-Type
+  assert.equal((await raw('/api/nope', { method: 'POST', body: '{}' })).status, 404);
+});
+
+test('malformed URL escapes return 400, not 500', async () => {
+  assert.equal((await raw('/%E0%A4%A')).status, 400);
+  assert.equal((await raw('/does-not-exist.js')).status, 404);
+  assert.equal((await raw('/')).status, 200);
+});
+
+test('server binds to loopback by default', () => {
+  assert.match(startupLine, /http:\/\/127\.0\.0\.1:3999/);
+});
+
+const seed = async (date, items) => {
+  for (const [title, start, end] of items) {
+    assert.equal((await call('/entries', 'POST', { date, title, start, end })).status, 201);
+  }
+};
+const gen = (date, start, tasks, extra = {}) =>
+  call('/generate', 'POST', { date, start, breakMinutes: 10, replace: false, tasks, ...extra });
+
+test('fit-around: exact-fit gap and adjacent entries do not conflict', async () => {
+  await seed('2030-04-01', [['Before', '09:00', '10:00'], ['After', '11:00', '12:00']]);
+  const res = await gen('2030-04-01', '09:00', [{ title: 'Exact', minutes: 60 }]);
+  assert.equal(res.status, 201);
+  assert.deepEqual(brief(res.data.entries), [
+    ['Before', '09:00', '10:00'], ['Exact', '10:00', '11:00'], ['After', '11:00', '12:00'],
+  ]);
+  assert.deepEqual(res.data.unscheduled, []);
+});
+
+test('fit-around: entries before the start are ignored; an entry spanning the start pushes the task after it', async () => {
+  await seed('2030-04-02', [['Early', '07:00', '08:00'], ['Spanning', '08:00', '10:00']]);
+  const res = await gen('2030-04-02', '09:00', [{ title: 'T', minutes: 30 }]);
+  assert.deepEqual(brief(res.data.entries), [
+    ['Early', '07:00', '08:00'], ['Spanning', '08:00', '10:00'], ['T', '10:00', '10:30'],
+  ]);
+});
+
+test('fit-around: a task bigger than every gap is skipped while a later smaller one is placed', async () => {
+  await seed('2030-04-03', [['Block', '10:00', '12:00'], ['Evening', '12:30', '24:00']]);
+  const res = await gen('2030-04-03', '09:00', [
+    { title: 'Big', minutes: 120, priority: 1 },
+    { title: 'Small', minutes: 30, priority: 2 },
+  ]);
+  assert.equal(res.status, 201);
+  assert.deepEqual(brief(res.data.entries).filter((e) => !['Block', 'Evening'].includes(e[0])), [['Small', '09:00', '09:30']]);
+  assert.deepEqual(res.data.unscheduled, [{ title: 'Big', minutes: 120, reason: 'no free gap long enough at or after 09:00' }]);
+});
+
+test('fit-around: a fully booked day returns 400 and saves nothing', async () => {
+  await seed('2030-04-04', [['All day', '00:00', '24:00']]);
+  const res = await gen('2030-04-04', '09:00', [{ title: 'A', minutes: 30 }]);
+  assert.equal(res.status, 400);
+  assert.match(res.data.error, /No task fits in the free time at or after 09:00/);
+  assert.deepEqual(res.data.unscheduled.map((u) => u.title), ['A']);
+  assert.deepEqual(brief((await call('/entries?date=2030-04-04')).data), [['All day', '00:00', '24:00']]);
+});
+
+test('replace on ignores existing entries and deletes them', async () => {
+  await seed('2030-04-05', [['Old', '09:00', '10:00']]);
+  const res = await gen('2030-04-05', '09:00', [{ title: 'New', minutes: 30 }], { replace: true });
+  assert.deepEqual(brief(res.data.entries), [['New', '09:00', '09:30']]);
+});
+
+test('fit-around: no break next to existing entries, break between adjacent generated tasks', async () => {
+  await seed('2030-04-06', [['Meeting', '10:00', '11:00']]);
+  const res = await gen('2030-04-06', '09:00', [
+    { title: 'A', minutes: 60, priority: 1 },
+    { title: 'B', minutes: 30, priority: 2 },
+    { title: 'C', minutes: 30, priority: 3 },
+  ]);
+  assert.deepEqual(brief(res.data.entries), [
+    ['A', '09:00', '10:00'],
+    ['Meeting', '10:00', '11:00'],
+    ['B', '11:00', '11:30'],
+    ['Break', '11:30', '11:40'],
+    ['C', '11:40', '12:10'],
+  ]);
+});
+
+test('omitted replace behaves as false (fit around)', async () => {
+  await seed('2030-04-07', [['Keep', '09:00', '10:00']]);
+  const res = await call('/generate', 'POST', { date: '2030-04-07', start: '09:00', tasks: [{ title: 'T', minutes: 30 }] });
+  assert.deepEqual(brief(res.data.entries), [['Keep', '09:00', '10:00'], ['T', '10:00', '10:30']]);
+});
+
+test('error responses carry an optional field hint', async () => {
+  const fieldOf = async (path, method, body) => (await call(path, method, body)).data.field;
+  const ok = { date: DATE, title: 'F', start: '05:00', end: '05:30' };
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, title: '' }), 'title');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, start: '5am' }), 'start');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, start: '24:00', end: '24:00' }), 'start');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, end: '99:00' }), 'end');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, end: '05:00' }), 'end');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, category: 'nope' }), 'category');
+  assert.equal(await fieldOf('/entries', 'POST', { ...ok, date: '2030-02-31' }), 'date');
+  const t = (task) => ({ date: DATE, tasks: [{ title: 'OK', minutes: 30 }, task] });
+  assert.equal(await fieldOf('/generate', 'POST', t(null)), 'tasks[1]');
+  assert.equal(await fieldOf('/generate', 'POST', t({ title: '', minutes: 30 })), 'tasks[1].title');
+  assert.equal(await fieldOf('/generate', 'POST', t({ title: 'x', minutes: 1 })), 'tasks[1].minutes');
+  assert.equal(await fieldOf('/generate', 'POST', t({ title: 'x', minutes: 30, priority: 9 })), 'tasks[1].priority');
+  assert.equal(await fieldOf('/generate', 'POST', t({ title: 'x', minutes: 30, category: 'bad' })), 'tasks[1].category');
+  assert.equal(await fieldOf('/generate', 'POST', { date: DATE, breakMinutes: 500, tasks: [{ title: 'x', minutes: 30 }] }), 'breakMinutes');
+  assert.equal(await fieldOf('/generate', 'POST', { date: DATE, replace: 'no', tasks: [{ title: 'x', minutes: 30 }] }), 'replace');
+  // field-less errors (overlap) omit it
+  await call('/entries', 'POST', { date: '2030-05-01', title: 'A', start: '09:00', end: '10:00' });
+  const clash = await call('/entries', 'POST', { date: '2030-05-01', title: 'B', start: '09:30', end: '10:30' });
+  assert.equal(clash.status, 409);
+  assert.equal('field' in clash.data, false);
 });

@@ -1,79 +1,14 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><text y=%2213%22 font-size=%2213%22>🗓️</text></svg>" />
   <title>My Day Timetable</title>
-  <link rel="stylesheet" href="style.css">
+  <script type="module" crossorigin src="/assets/index-B-Q3k7aH.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-THlDCvd7.css">
 </head>
 <body>
-  <header>
-    <h1>My Day Timetable</h1>
-    <div class="date-nav">
-      <button id="prev-day" aria-label="Previous day">&larr;</button>
-      <input type="date" id="date" aria-label="Date">
-      <button id="next-day" aria-label="Next day">&rarr;</button>
-      <button id="today">Today</button>
-    </div>
-  </header>
-
-  <main>
-    <section class="panel" aria-labelledby="schedule-title">
-      <div class="panel-head">
-        <h2 id="schedule-title">Schedule</h2>
-        <span id="progress" class="muted"></span>
-        <button id="clear-day" class="danger small">Clear day</button>
-      </div>
-      <p id="message" role="status" class="message" hidden></p>
-      <ul id="schedule" class="schedule"></ul>
-      <p id="empty" class="muted">Nothing planned yet. Add an entry or generate a timetable.</p>
-    </section>
-
-    <aside>
-      <section class="panel" aria-labelledby="add-title">
-        <h2 id="add-title">Add entry</h2>
-        <form id="add-form">
-          <label>Title <input name="title" required maxlength="100"></label>
-          <div class="row">
-            <label>Start <input type="time" name="start" required></label>
-            <label>End <input type="time" name="end" required></label>
-          </div>
-          <label>Category <select name="category"></select></label>
-          <button type="submit">Add</button>
-        </form>
-      </section>
-
-      <section class="panel" aria-labelledby="gen-title">
-        <h2 id="gen-title">Generate timetable</h2>
-        <p class="muted">List your tasks; they are scheduled back to back, highest priority first, with breaks between.</p>
-        <form id="gen-form">
-          <div class="row">
-            <label>Day starts <input type="time" name="start" value="09:00" required></label>
-            <label>Break (min) <input type="number" name="breakMinutes" value="10" min="0" max="120" required></label>
-          </div>
-          <div id="task-rows"></div>
-          <button type="button" id="add-task" class="secondary">+ Add task</button>
-          <label class="check"><input type="checkbox" name="replace" checked> Replace existing entries for this day</label>
-          <button type="submit">Generate</button>
-        </form>
-      </section>
-    </aside>
-  </main>
-
-  <template id="task-row">
-    <div class="task-row">
-      <input name="title" placeholder="Task" aria-label="Task title" maxlength="100" required>
-      <input name="minutes" type="number" value="60" min="5" max="480" step="5" aria-label="Minutes" required>
-      <select name="priority" aria-label="Priority">
-        <option value="1">High</option>
-        <option value="2" selected>Medium</option>
-        <option value="3">Low</option>
-      </select>
-      <select name="category" aria-label="Category"></select>
-      <button type="button" class="remove danger small" aria-label="Remove task">&times;</button>
-    </div>
-  </template>
-
-  <script src="app.js"></script>
+  <div id="root"></div>
 </body>
 </html>
